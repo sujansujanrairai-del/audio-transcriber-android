@@ -1,0 +1,135 @@
+name: Android Release APKs
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build unsigned ABI APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest
+
+      - name: Assemble production release APKs
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify ABI APKs and prepare unsigned artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output_dir="app/build/outputs/apk/release"
+          artifact_dir="release-artifacts"
+          expected_abis=(armeabi-v7a arm64-v8a x86 x86_64)
+
+          if [[ ! -d "$output_dir" ]]; then
+            echo "::error::Gradle did not create the release APK output directory: $output_dir"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          apks=("$output_dir"/*.apk)
+          if [[ ${#apks[@]} -ne ${#expected_abis[@]} ]]; then
+            echo "::error::Expected ${#expected_abis[@]} ABI APKs, found ${#apks[@]}"
+            printf 'Found: %s\n' "${apks[@]:-none}"
+            exit 1
+          fi
+
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$sdk_root" || ! -d "$sdk_root/build-tools" ]]; then
+            echo "::error::Android SDK build-tools were not found"
+            exit 1
+          fi
+          mapfile -t apksigners < <(find "$sdk_root/build-tools" -type f -name apksigner -print | sort -V)
+          if [[ ${#apksigners[@]} -eq 0 ]]; then
+            echo "::error::apksigner was not found in the Android SDK build-tools"
+            exit 1
+          fi
+          apksigner="${apksigners[-1]}"
+
+          mkdir -p "$artifact_dir"
+          for abi in "${expected_abis[@]}"; do
+            matches=("$output_dir"/*"$abi"*.apk)
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              echo "::error::Expected exactly one release APK for $abi, found ${#matches[@]}"
+              printf 'Matches: %s\n' "${matches[@]:-none}"
+              exit 1
+            fi
+
+            source_apk="${matches[0]}"
+            destination_dir="$artifact_dir/$abi"
+            destination_apk="$destination_dir/audio-transcriber-$abi-unsigned.apk"
+            mkdir -p "$destination_dir"
+            unzip -tq "$source_apk"
+
+            if "$apksigner" verify "$source_apk" >/dev/null 2>&1; then
+              echo "::error::Expected an unsigned release APK, but $source_apk has a valid signature"
+              exit 1
+            fi
+
+            cp "$source_apk" "$destination_apk"
+            echo "Prepared unsigned $abi artifact: $destination_apk"
+          done
+
+      - name: Upload armeabi-v7a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-transcriber-release-armeabi-v7a-unsigned
+          path: release-artifacts/armeabi-v7a/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload arm64-v8a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-transcriber-release-arm64-v8a-unsigned
+          path: release-artifacts/arm64-v8a/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload x86 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-transcriber-release-x86-unsigned
+          path: release-artifacts/x86/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-transcriber-release-x86_64-unsigned
+          path: release-artifacts/x86_64/*.apk
+          if-no-files-found: error
+          retention-days: 30

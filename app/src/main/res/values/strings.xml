@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Transcend</string>
+    <string name="app_name">Audio Transcriber</string>
     <string name="tagline">Turn Every Voice into Text</string>
     <string name="developer_credit">Developed by Sujan Rai • Nepal</string>
 
@@ -14,7 +14,7 @@
     <string name="feature_diarization_desc">Diarization for up to 8 distinct speakers with word-level timestamps and timeline navigation.</string>
 
     <string name="api_key_card_title">Gemini API Key Setup</string>
-    <string name="api_key_card_desc">Transcend uses your own Gemini API key. It is stored securely in hardware-backed EncryptedSharedPreferences (AES-256).</string>
+    <string name="api_key_card_desc">Audio Transcriber uses your own Gemini API key. It is stored securely in hardware-backed EncryptedSharedPreferences (AES-256).</string>
     <string name="api_key_hint">Paste your Gemini API key (e.g. AIzaSy...)</string>
     <string name="api_key_validate_button">Validate &amp; Save Key</string>
     <string name="api_key_validating">Validating key with Gemini...</string>
@@ -70,13 +70,13 @@
     <string name="action_delete">Delete</string>
 
     <!-- Settings -->
-    <string name="settings_title">Transcend Settings</string>
+    <string name="settings_title">Audio Transcriber Settings</string>
     <string name="settings_section_transcription">Transcription Configuration</string>
     <string name="settings_section_audio">Audio &amp; Voice Detection (VAD)</string>
     <string name="settings_section_appearance">Appearance &amp; Themes</string>
     <string name="settings_section_accessibility">Deep Accessibility</string>
     <string name="settings_section_data">Data, Privacy &amp; Keys</string>
-    <string name="settings_section_about">About Transcend</string>
+    <string name="settings_section_about">About Audio Transcriber</string>
 
     <!-- Accessibility Descriptions -->
     <string name="cd_mic_button">Microphone button to toggle real-time transcription</string>

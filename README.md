@@ -1,4 +1,4 @@
-# Transcend — Advanced Audio Transcription Powered by Gemini 3.5 Transcribe
+# Audio Transcriber — Advanced Audio Transcription Powered by Gemini 3.5 Transcribe
 
 **Developer:** Sujan Rai • Nepal  
 **Platform:** Android (API 24+)  
@@ -9,7 +9,7 @@
 
 ## 🎯 Overview
 
-**Transcend** is a flagship Android application delivering speech-to-text intelligence with Google's **Gemini 3.5 Transcribe** models:
+**Audio Transcriber** is a flagship Android application delivering speech-to-text intelligence with Google's **Gemini 3.5 Transcribe** models:
 * **Live Streaming:** Real-time, sub-second latency streaming transcription over bidirectional WebSockets using `gemini-3.5-transcribe-live` (4.0% Word Error Rate).
 * **Pre-Recorded Audio:** High-fidelity audio transcription using `gemini-3.5-transcribe` (2.6% Word Error Rate) with speaker diarization for up to 8 distinct speakers and word-level timestamps.
 * **Smart Transcription:** Automatic filler-word elimination ("uh", "um"), stutter removal, self-correction handling, and sentence punctuation.
@@ -20,17 +20,17 @@
 
 ## 🏗️ Architecture
 
-Transcend adheres strictly to **Clean Architecture** and **MVVM** principles:
+Audio Transcriber adheres strictly to **Clean Architecture** and **MVVM** principles:
 
 ```
-app/src/main/java/com/example/
-├── TranscendApplication.kt       # Application setup, notification channels & dependency tree
+app/src/main/java/com/blindtechnexus/audiotranscriber/
+├── AudioTranscriberApplication.kt       # Application setup, notification channels & dependency tree
 ├── MainActivity.kt               # Jetpack Navigation host, edge-to-edge insets & runtime permissions
 ├── domain/                       # Core domain models (Transcripts, Settings, Audio Configs)
 │   └── model/
 ├── data/                         # Data layer (Remote, Local DB, Audio Capture)
 │   ├── local/
-│   │   ├── database/             # Room Database (TranscendDatabase)
+│   │   ├── database/             # Room Database (AudioTranscriberDatabase)
 │   │   ├── dao/                  # TranscriptDao with reactive Kotlin Flow
 │   │   ├── entity/               # TranscriptEntity with JSON serialization
 │   │   ├── preferences/          # UserPreferencesManager for theme & transcription settings
@@ -55,11 +55,26 @@ app/src/main/java/com/example/
     └── settings/                 # Customization engine (VAD, Themes, Key rotation)
 ```
 
+The Android namespace and application ID are `com.blindtechnexus.audiotranscriber`.
+
+---
+
+## 📦 Building production APKs
+
+The production `release` build is intentionally unsigned and split into four ABI-specific APKs: `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+
+```bash
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleRelease
+```
+
+The APKs are written to `app/build/outputs/apk/release/`. The GitHub Actions workflow at `.github/workflows/android-release.yml` builds and tests the app for pull requests, pushes to `main`, and manual dispatches, then uploads one downloadable artifact per ABI. Release artifacts are unsigned and must be signed by the distributor before installation or publishing.
+
 ---
 
 ## 🔑 Gemini API Key Security
 
-Transcend never hardcodes API keys in the APK. User keys are handled securely:
+Audio Transcriber never hardcodes API keys in the APK. User keys are handled securely:
 1. **Hardware-Backed Cryptography:** Keys are encrypted on-device using AndroidX Security Crypto's `EncryptedSharedPreferences` with an AES-256-GCM `MasterKey`.
 2. **Lightweight Validation:** On input, the key is verified against the Gemini models endpoint (`GET /v1beta/models`) with immediate UI feedback.
 3. **Masked Display:** Keys are displayed masked (e.g. `AIza...xYz9`).
@@ -69,7 +84,7 @@ Transcend never hardcodes API keys in the APK. User keys are handled securely:
 
 ## 🎙️ Live Transcription (WebSocket Protocol)
 
-Transcend connects to:
+Audio Transcriber connects to:
 ```
 wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={API_KEY}
 ```
