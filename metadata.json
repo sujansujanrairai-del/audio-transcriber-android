@@ -1,5 +1,5 @@
 {
-  "name": "Transcend",
+  "name": "Audio Transcriber",
   "description": "Production-quality audio transcription app powered by Gemini 3.5 Transcribe with real-time live streaming, pre-recorded audio transcription, speaker diarization, and custom vocabulary.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.blindtechnexus.audiotranscriber"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.example"
+    applicationId = "com.blindtechnexus.audiotranscriber"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -22,21 +22,21 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  // Do not remove or modify these signingConfigs. They are necessary for building, installing,
-  // and updating Android apps in AI Studio.
-  signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
-    }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+  // No signingConfigs are defined on purpose: CI builds UNSIGNED release APKs
+  // (app-*-release-unsigned.apk). Sign an APK locally / at distribution time with
+  // your own keystore (e.g. `apksigner sign`) before publishing it. The debug
+  // build type keeps the Android Gradle Plugin's auto-generated debug key.
+
+  // One APK per ABI plus a universal APK that bundles every ABI. A single
+  // `assembleRelease` invocation emits all of them into
+  // app/build/outputs/apk/release, and CI packages each one into its own
+  // architecture archive (see ci/package_release_archives.sh).
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a")
+      isUniversalApk = true
     }
   }
 
@@ -45,14 +45,10 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      // Deliberately no signingConfig: release output stays unsigned.
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // No explicit signingConfig: AGP's default debug key is used.
     }
   }
   compileOptions {

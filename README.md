@@ -1,4 +1,4 @@
-# Transcend — Advanced Audio Transcription Powered by Gemini 3.5 Transcribe
+# Audio Transcriber — Advanced Audio Transcription Powered by Gemini 3.5 Transcribe
 
 **Developer:** Sujan Rai • Nepal  
 **Platform:** Android (API 24+)  
@@ -9,7 +9,7 @@
 
 ## 🎯 Overview
 
-**Transcend** is a flagship Android application delivering speech-to-text intelligence with Google's **Gemini 3.5 Transcribe** models:
+**Audio Transcriber** is a flagship Android application delivering speech-to-text intelligence with Google's **Gemini 3.5 Transcribe** models:
 * **Live Streaming:** Real-time, sub-second latency streaming transcription over bidirectional WebSockets using `gemini-3.5-transcribe-live` (4.0% Word Error Rate).
 * **Pre-Recorded Audio:** High-fidelity audio transcription using `gemini-3.5-transcribe` (2.6% Word Error Rate) with speaker diarization for up to 8 distinct speakers and word-level timestamps.
 * **Smart Transcription:** Automatic filler-word elimination ("uh", "um"), stutter removal, self-correction handling, and sentence punctuation.
@@ -20,17 +20,17 @@
 
 ## 🏗️ Architecture
 
-Transcend adheres strictly to **Clean Architecture** and **MVVM** principles:
+Audio Transcriber adheres strictly to **Clean Architecture** and **MVVM** principles:
 
 ```
-app/src/main/java/com/example/
-├── TranscendApplication.kt       # Application setup, notification channels & dependency tree
+app/src/main/java/com/blindtechnexus/audiotranscriber/
+├── AudioTranscriberApplication.kt       # Application setup, notification channels & dependency tree
 ├── MainActivity.kt               # Jetpack Navigation host, edge-to-edge insets & runtime permissions
 ├── domain/                       # Core domain models (Transcripts, Settings, Audio Configs)
 │   └── model/
 ├── data/                         # Data layer (Remote, Local DB, Audio Capture)
 │   ├── local/
-│   │   ├── database/             # Room Database (TranscendDatabase)
+│   │   ├── database/             # Room Database (AudioTranscriberDatabase)
 │   │   ├── dao/                  # TranscriptDao with reactive Kotlin Flow
 │   │   ├── entity/               # TranscriptEntity with JSON serialization
 │   │   ├── preferences/          # UserPreferencesManager for theme & transcription settings
@@ -59,7 +59,7 @@ app/src/main/java/com/example/
 
 ## 🔑 Gemini API Key Security
 
-Transcend never hardcodes API keys in the APK. User keys are handled securely:
+Audio Transcriber never hardcodes API keys in the APK. User keys are handled securely:
 1. **Hardware-Backed Cryptography:** Keys are encrypted on-device using AndroidX Security Crypto's `EncryptedSharedPreferences` with an AES-256-GCM `MasterKey`.
 2. **Lightweight Validation:** On input, the key is verified against the Gemini models endpoint (`GET /v1beta/models`) with immediate UI feedback.
 3. **Masked Display:** Keys are displayed masked (e.g. `AIza...xYz9`).
@@ -69,7 +69,7 @@ Transcend never hardcodes API keys in the APK. User keys are handled securely:
 
 ## 🎙️ Live Transcription (WebSocket Protocol)
 
-Transcend connects to:
+Audio Transcriber connects to:
 ```
 wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={API_KEY}
 ```
@@ -95,3 +95,27 @@ wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.
 * **Heading Semantics:** Speaker changes are tagged with `heading()` for TalkBack jump navigation.
 * **Touch Targets:** Standardized to at least 48dp × 48dp, with an "Expanded Touch Targets" mode increasing interactive components to 56dp.
 * **Contrast & Color-Blind Modes:** Contrast ratios exceed WCAG AA/AAA with dedicated palettes for Protanopia, Deuteranopia, and Tritanopia.
+
+---
+
+## 📦 Building & CI Releases
+
+**App ID:** `com.blindtechnexus.audiotranscriber` • **App name:** Audio Transcriber
+
+GitHub Actions (`.github/workflows/android-ci.yml`) builds the production
+release on every push / pull request:
+
+```bash
+./gradlew testDebugUnitTest   # JVM unit tests
+./gradlew assembleRelease     # 64-bit + 32-bit + universal APKs in one run
+./ci/package_release_archives.sh app/build/outputs/apk/release release-artifacts
+```
+
+ABI splits produce one unsigned APK per architecture plus a universal APK
+(`app-arm64-v8a-release-unsigned.apk`, `app-armeabi-v7a-release-unsigned.apk`,
+`app-universal-release-unsigned.apk`). No signing configuration is kept in the
+build: CI packages each APK into its own downloadable artifact —
+`Audio-Transcriber-x64-release.zip`, `Audio-Transcriber-32-bit-release.zip`,
+and `Audio-Transcriber-universal-release.zip` (with `SHA256SUMS.txt`) —
+retained for 30 days. Sign an APK with your own keystore (e.g. `apksigner
+sign`) before distributing it.
