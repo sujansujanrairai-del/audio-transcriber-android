@@ -155,4 +155,12 @@ class UserPreferencesManager(context: Context) {
             .putString("color_blind_mode", updated.colorBlindMode.name)
             .apply()
     }
+
+    fun isWelcomeCompleted(): Boolean {
+        return prefs.getBoolean("welcome_completed", false)
+    }
+
+    fun setWelcomeCompleted(completed: Boolean) {
+        prefs.edit().putBoolean("welcome_completed", completed).apply()
+    }
 }

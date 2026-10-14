@@ -19,6 +19,7 @@ sealed class KeyValidationUiState {
 
 class WelcomeViewModel(
     private val secureKeyStorage: SecureKeyStorage,
+    private val userPreferencesManager: com.blindtechnexus.audiotranscriber.data.local.preferences.UserPreferencesManager,
     private val apiClient: GeminiTranscribeApiClient = GeminiTranscribeApiClient()
 ) : ViewModel() {
 
@@ -57,6 +58,7 @@ class WelcomeViewModel(
             when (result) {
                 is ApiValidationResult.Success -> {
                     secureKeyStorage.saveApiKey(key)
+                    userPreferencesManager.setWelcomeCompleted(true)
                     _validationState.value = KeyValidationUiState.Valid
                     onSuccess?.invoke()
                 }
@@ -65,5 +67,10 @@ class WelcomeViewModel(
                 }
             }
         }
+    }
+
+    fun onSkipForNow(onNavigate: () -> Unit) {
+        userPreferencesManager.setWelcomeCompleted(true)
+        onNavigate()
     }
 }

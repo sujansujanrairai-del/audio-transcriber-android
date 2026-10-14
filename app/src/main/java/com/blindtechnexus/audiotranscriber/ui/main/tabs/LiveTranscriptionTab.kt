@@ -32,6 +32,8 @@ import com.blindtechnexus.audiotranscriber.domain.model.TranscriptSegment
 import com.blindtechnexus.audiotranscriber.ui.accessibility.accessibleTouchTarget
 import com.blindtechnexus.audiotranscriber.ui.accessibility.transcribeLiveRegion
 import com.blindtechnexus.audiotranscriber.ui.components.AudioWaveformVisualizer
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import com.blindtechnexus.audiotranscriber.ui.components.CustomVocabularyBottomSheet
 import com.blindtechnexus.audiotranscriber.ui.main.LiveTranscriptionUiState
 import com.blindtechnexus.audiotranscriber.ui.main.MainViewModel
@@ -41,6 +43,7 @@ import com.blindtechnexus.audiotranscriber.ui.theme.getSpeakerColor
 @Composable
 fun LiveTranscriptionTab(
     viewModel: MainViewModel,
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val liveState by viewModel.liveUiState.collectAsState()
@@ -145,25 +148,30 @@ fun LiveTranscriptionTab(
             }
         }
 
-        // Limit Warning Banner (9+ minutes)
-        AnimatedVisibility(visible = liveState.isLimitWarning) {
+        // Connection Error Alert Banner
+        AnimatedVisibility(visible = liveState.connectionState is LiveConnectionState.Error) {
+            val errorMsg = (liveState.connectionState as? LiveConnectionState.Error)?.message ?: "Connection error"
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 6.dp)
+                    .padding(vertical = 4.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.live_session_limit_warning),
+                        text = errorMsg,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
                     )
+                    TextButton(onClick = onOpenSettings) {
+                        Text("Settings", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }
@@ -305,21 +313,24 @@ fun LiveTranscriptionTab(
 
         Spacer(modifier = Modifier.height(14.dp))
 
+        val hasTranscriptions = liveState.liveSegments.isNotEmpty() || liveState.currentStreamingText.isNotEmpty()
+
         // Session Controls: Large Animated Pulsing Record Button + Control Actions
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Clear Button
-            IconButton(
-                onClick = { viewModel.clearLiveSession() },
-                modifier = Modifier
-                    .size(48.dp)
-                    .accessibleTouchTarget(),
-                enabled = liveState.liveSegments.isNotEmpty() || liveState.isRecording
-            ) {
-                Icon(Icons.Default.DeleteOutline, contentDescription = "Clear session")
+            // Clear Button (only when recording or segments present)
+            if (hasTranscriptions || liveState.isRecording) {
+                IconButton(
+                    onClick = { viewModel.clearLiveSession() },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .accessibleTouchTarget()
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = "Clear session")
+                }
             }
 
             // Pause / Resume Button
@@ -347,29 +358,45 @@ fun LiveTranscriptionTab(
                 onClick = { viewModel.toggleLiveRecording() }
             )
 
-            // Save Transcript Button
-            IconButton(
-                onClick = { viewModel.saveLiveTranscript() },
-                modifier = Modifier
-                    .size(48.dp)
-                    .accessibleTouchTarget(),
-                enabled = liveState.liveSegments.isNotEmpty()
-            ) {
-                Icon(Icons.Default.BookmarkBorder, contentDescription = "Save Transcript")
-            }
+            // Copy, Save & Share Buttons - ONLY visible when transcriptions are present!
+            if (hasTranscriptions) {
+                // Copy Button
+                IconButton(
+                    onClick = {
+                        val full = liveState.liveSegments.joinToString("\n") { "${it.speaker}: ${it.text}" }
+                            .ifBlank { liveState.currentStreamingText }
+                        viewModel.copyToClipboard(full)
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .accessibleTouchTarget()
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy Transcript")
+                }
 
-            // Export / Share Button
-            IconButton(
-                onClick = {
-                    val full = liveState.liveSegments.joinToString("\n") { "${it.speaker}: ${it.text}" }
-                    viewModel.shareTranscript(full, "Audio Transcriber Live Transcript")
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .accessibleTouchTarget(),
-                enabled = liveState.liveSegments.isNotEmpty()
-            ) {
-                Icon(Icons.Default.Share, contentDescription = "Share Transcript")
+                // Save Transcript Button
+                IconButton(
+                    onClick = { viewModel.saveLiveTranscript() },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .accessibleTouchTarget()
+                ) {
+                    Icon(Icons.Default.BookmarkBorder, contentDescription = "Save Transcript")
+                }
+
+                // Export / Share Button
+                IconButton(
+                    onClick = {
+                        val full = liveState.liveSegments.joinToString("\n") { "${it.speaker}: ${it.text}" }
+                            .ifBlank { liveState.currentStreamingText }
+                        viewModel.shareTranscript(full, "Audio Transcriber Live Transcript")
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .accessibleTouchTarget()
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = "Share Transcript")
+                }
             }
         }
 

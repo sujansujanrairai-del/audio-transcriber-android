@@ -24,6 +24,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -91,7 +93,8 @@ fun WelcomeScreen(
                 text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.ExtraBold,
-                color = MaterialTheme.colorScheme.onBackground
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.semantics { heading() }
             )
 
             Text(
@@ -349,7 +352,7 @@ fun WelcomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             TextButton(
-                onClick = onNavigateToMain,
+                onClick = { viewModel.onSkipForNow(onNavigateToMain) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .accessibleTouchTarget()

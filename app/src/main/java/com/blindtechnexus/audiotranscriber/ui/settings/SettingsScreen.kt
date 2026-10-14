@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,11 +28,48 @@ import com.blindtechnexus.audiotranscriber.domain.model.*
 import com.blindtechnexus.audiotranscriber.ui.accessibility.accessibleTouchTarget
 import com.blindtechnexus.audiotranscriber.ui.components.CustomVocabularyBottomSheet
 
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.settings_title),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.semantics { heading() }
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.accessibleTouchTarget()
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to home")
+                    }
+                }
+            )
+        },
+        modifier = modifier.testTag("settings_screen")
+    ) { innerPadding ->
+        SettingsContent(
+            viewModel = viewModel,
+            modifier = Modifier.padding(innerPadding)
+        )
+    }
+}
+
+@Composable
+fun SettingsContent(
+    viewModel: SettingsViewModel,
     modifier: Modifier = Modifier
 ) {
     val themeSettings by viewModel.themeSettings.collectAsState()
@@ -54,35 +92,21 @@ fun SettingsScreen(
     var isDataExpanded by remember { mutableStateOf(false) }
     var isAboutExpanded by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title), fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        },
-        modifier = modifier.testTag("settings_screen")
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Section 1: Transcription Configuration
+        CollapsibleSectionCard(
+            title = stringResource(R.string.settings_section_transcription),
+            icon = Icons.Default.Subtitles,
+            isExpanded = isTranscriptionExpanded,
+            onToggle = { isTranscriptionExpanded = !isTranscriptionExpanded }
         ) {
-            // Section 1: Transcription Configuration
-            CollapsibleSectionCard(
-                title = stringResource(R.string.settings_section_transcription),
-                icon = Icons.Default.Subtitles,
-                isExpanded = isTranscriptionExpanded,
-                onToggle = { isTranscriptionExpanded = !isTranscriptionExpanded }
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     // Smart transcription toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -101,7 +125,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Highlight removed filler words
                     Row(
@@ -121,7 +145,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Custom Vocabulary Manager Button
                     Row(
@@ -160,7 +184,7 @@ fun SettingsScreen(
                         Text("16,000 Hz (16-bit Mono PCM)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // VAD Sensitivity
                     Text("Voice Activity Detection (VAD) Sensitivity", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -179,7 +203,7 @@ fun SettingsScreen(
                         }
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Noise suppression
                     Row(
@@ -237,7 +261,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // 10 Preset Color Schemes with live color dots
                     Text("Color Palette Preset (10 Presets)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -277,7 +301,7 @@ fun SettingsScreen(
                         }
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Corner Radius Slider
                     Text("Corner Radius: ${themeSettings.cornerRadiusDp} dp", style = MaterialTheme.typography.bodyMedium)
@@ -288,7 +312,7 @@ fun SettingsScreen(
                         steps = 27
                     )
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Font Family Selector
                     Text("Font Family", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -333,7 +357,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Large Touch Targets (48dp vs 56dp)
                     Row(
@@ -351,7 +375,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Live Region Announcements
                     Row(
@@ -393,7 +417,7 @@ fun SettingsScreen(
                         }
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -435,7 +459,6 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
         }
-    }
 
     // Key update dialog
     if (showKeyUpdateDialog) {
@@ -534,7 +557,12 @@ private fun CollapsibleSectionCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text(text = title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.semantics { heading() }
+                    )
                 }
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,

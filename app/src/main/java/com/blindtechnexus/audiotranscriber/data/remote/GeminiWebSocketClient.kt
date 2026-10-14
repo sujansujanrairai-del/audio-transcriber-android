@@ -69,6 +69,8 @@ class GeminiWebSocketClient(
         initiateConnection()
     }
 
+    private var currentModel: String = GeminiLiveProtocol.DEFAULT_MODEL
+
     private fun initiateConnection() {
         val url = "${GeminiLiveProtocol.WS_URL_BASE}?key=$currentApiKey"
         val request = Request.Builder().url(url).build()
@@ -81,12 +83,13 @@ class GeminiWebSocketClient(
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("GeminiWebSocketClient", "WebSocket Connected")
+                Log.d("GeminiWebSocketClient", "WebSocket Connected using $currentModel")
                 reconnectAttempt = 0
                 _connectionState.value = LiveConnectionState.Connected
 
                 // Send Setup Message immediately upon connection
                 val setupJson = GeminiLiveProtocol.createSetupMessage(
+                    model = currentModel,
                     languageCode = currentLanguageCode,
                     customVocabulary = currentCustomVocab
                 )
@@ -96,6 +99,10 @@ class GeminiWebSocketClient(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val event = GeminiLiveProtocol.parseServerContent(text)
                 if (event != null) {
+                    if (event is LiveTranscriptionEvent.ErrorEvent) {
+                        Log.e("GeminiWebSocketClient", "Server error event: ${event.message}")
+                        _connectionState.value = LiveConnectionState.Error(event.message)
+                    }
                     clientScope?.launch {
                         _events.emit(event)
                     }
@@ -103,8 +110,36 @@ class GeminiWebSocketClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("GeminiWebSocketClient", "WebSocket Failure: ${t.message}", t)
-                handleDisconnection(t.message ?: "Connection lost")
+                val statusCode = response?.code ?: 0
+                val errorBody = try { response?.body?.string().orEmpty() } catch (_: Exception) { "" }
+                Log.e("GeminiWebSocketClient", "WebSocket Failure: code=$statusCode, msg=${t.message}, body=$errorBody", t)
+
+                if (statusCode in listOf(400, 401, 403)) {
+                    shouldReconnect = false
+                    _connectionState.value = LiveConnectionState.Error(
+                        "Authentication error ($statusCode): Invalid or unauthorized Gemini API key. Please check your API key in Settings."
+                    )
+                    return
+                }
+
+                // If 404 model not found, switch to fallback model and retry once
+                if (statusCode == 404 && currentModel != GeminiLiveProtocol.FALLBACK_MODEL) {
+                    Log.w("GeminiWebSocketClient", "Switching to fallback model ${GeminiLiveProtocol.FALLBACK_MODEL}")
+                    currentModel = GeminiLiveProtocol.FALLBACK_MODEL
+                    clientScope?.launch {
+                        delay(500)
+                        if (shouldReconnect) {
+                            initiateConnection()
+                        }
+                    }
+                    return
+                }
+
+                val failureMessage = when {
+                    statusCode != 0 -> "Connection failed (HTTP $statusCode): ${t.message ?: "Server rejected connection"}"
+                    else -> t.message ?: "Connection lost"
+                }
+                handleDisconnection(failureMessage)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {

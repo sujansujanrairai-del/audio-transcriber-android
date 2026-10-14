@@ -22,6 +22,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.blindtechnexus.audiotranscriber.R
@@ -37,6 +39,7 @@ import com.blindtechnexus.audiotranscriber.ui.theme.getSpeakerColor
 @Composable
 fun FileTranscriptionTab(
     viewModel: MainViewModel,
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val fileState by viewModel.fileUiState.collectAsState()
@@ -200,12 +203,24 @@ fun FileTranscriptionTab(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = fileState.errorMessage!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(10.dp)
-                )
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = fileState.errorMessage!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (fileState.errorMessage!!.contains("401") || fileState.errorMessage!!.contains("API key", ignoreCase = true)) {
+                        TextButton(onClick = onOpenSettings) {
+                            Text("Settings", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
         }
 
@@ -219,7 +234,11 @@ fun FileTranscriptionTab(
                     .weight(1f)
                     .padding(8.dp)
             ) {
-                Text("Analyzing audio with Gemini 3.5 Transcribe...", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = "Analyzing audio with Gemini 3.5 Transcribe...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { heading() }
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 repeat(4) {
                     ShimmerTranscriptItem()
@@ -251,29 +270,41 @@ fun FileTranscriptionTab(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                // AI Action Row: Summarize & Translate
+                // AI Action Row: Summarize, Translate & Web Search Verify
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     FilledTonalButton(
                         onClick = { viewModel.summarizeCurrentTranscript() },
                         enabled = !fileState.isSummarizing,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).accessibleTouchTarget(),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.Summarize, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Summarize, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (fileState.isSummarizing) "Summarizing..." else "Summarize")
+                        Text(if (fileState.isSummarizing) "Summary..." else "Summary", style = MaterialTheme.typography.labelSmall)
                     }
 
                     FilledTonalButton(
                         onClick = { viewModel.translateCurrentTranscript(fileState.targetTranslationLanguage) },
                         enabled = !fileState.isTranslating,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).accessibleTouchTarget(),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.Translate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Translate, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (fileState.isTranslating) "Translating..." else "Translate")
+                        Text(if (fileState.isTranslating) "Translate..." else "Translate", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    FilledTonalButton(
+                        onClick = { viewModel.performWebSearchGroundingForCurrentFile() },
+                        modifier = Modifier.weight(1f).accessibleTouchTarget(),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.TravelExplore, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Web Search", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 

@@ -31,6 +31,11 @@ data class FileTranscriptionResult(
     val summary: String? = null
 )
 
+data class WebSearchGroundingResult(
+    val content: String,
+    val sources: List<String> = emptyList()
+)
+
 @OptIn(ExperimentalEncodingApi::class)
 class GeminiTranscribeApiClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -43,6 +48,7 @@ class GeminiTranscribeApiClient(
         const val BASE_URL = "https://generativelanguage.googleapis.com"
         const val MODEL_TRANSCRIBE = "gemini-3.5-transcribe"
         const val MODEL_FLASH = "gemini-2.5-flash"
+        const val MODEL_TEXT = "gemini-3.5-flash"
     }
 
     /**
@@ -66,8 +72,9 @@ class GeminiTranscribeApiClient(
                     val code = response.code
                     val body = response.body?.string().orEmpty()
                     val errorMessage = when (code) {
-                        400, 403 -> "Invalid API key. Please check your credentials from Google AI Studio."
-                        429 -> "Quota exceeded. Please check your API rate limits."
+                        401 -> "Authentication error (401): Invalid or unauthorized Gemini API key. Please verify your API key from Google AI Studio."
+                        400, 403 -> "Invalid API key ($code): ${parseErrorMessage(body)}"
+                        429 -> "Quota exceeded (429). Please check your Gemini API rate limits."
                         else -> "API verification failed (HTTP $code): ${parseErrorMessage(body)}"
                     }
                     ApiValidationResult.Error(errorMessage)
@@ -89,6 +96,10 @@ class GeminiTranscribeApiClient(
         config: TranscriptionConfig,
         fileName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(Exception("Gemini API key is required. Please configure it in Settings."))
+        }
+
         try {
             val base64Audio = Base64.encode(audioBytes)
 
@@ -163,12 +174,18 @@ class GeminiTranscribeApiClient(
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
+                    val code = response.code
                     val errorBody = response.body?.string().orEmpty()
+
+                    if (code == 401) {
+                        return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key. Please check your key in Settings."))
+                    }
+
                     // Fallback attempt with gemini-2.5-flash if gemini-3.5-transcribe returns 404
-                    if (response.code == 404) {
+                    if (code == 404) {
                         return@withContext transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
                     }
-                    return@withContext Result.failure(Exception("Transcription failed (${response.code}): ${parseErrorMessage(errorBody)}"))
+                    return@withContext Result.failure(Exception("Transcription failed ($code): ${parseErrorMessage(errorBody)}"))
                 }
 
                 val responseBody = response.body?.string().orEmpty()
@@ -189,7 +206,7 @@ class GeminiTranscribeApiClient(
         fileName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
         val base64Audio = Base64.encode(audioBytes)
-        val prompt = "Transcribe this audio file accurately. Include speaker diarization and timestamps in JSON format with title, detectedLanguage, fullText, keyTopics, and segments."
+        val prompt = "Accurately transcribe this audio. Return ONLY a valid JSON object with: title, detectedLanguage, fullText, keyTopics (list of strings), and segments (list of objects with speaker, startTimeMs, endTimeMs, text)."
 
         val requestBodyJson = JSONObject().apply {
             val contents = JSONArray()
@@ -209,6 +226,7 @@ class GeminiTranscribeApiClient(
             put("contents", contents)
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
+                put("temperature", 0.2)
             })
         }
 
@@ -218,68 +236,216 @@ class GeminiTranscribeApiClient(
             .post(requestBodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("Transcription failed (${response.code})"))
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errorBody = response.body?.string().orEmpty()
+                    if (code == 401) {
+                        return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key."))
+                    }
+                    return@withContext Result.failure(Exception("Transcription failed ($code): ${parseErrorMessage(errorBody)}"))
+                }
+                val responseBody = response.body?.string().orEmpty()
+                Result.success(parseTranscriptionResponse(responseBody, fileName))
             }
-            val responseBody = response.body?.string().orEmpty()
-            Result.success(parseTranscriptionResponse(responseBody, fileName))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
     private fun parseTranscriptionResponse(jsonResponse: String, fallbackTitle: String): FileTranscriptionResult {
-        val root = JSONObject(jsonResponse)
-        val candidate = root.getJSONArray("candidates").getJSONObject(0)
-        val content = candidate.getJSONObject("content")
-        val text = content.getJSONArray("parts").getJSONObject(0).getString("text")
-
-        val data = JSONObject(text.trim())
-        val title = data.optString("title", fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"))
-        val detectedLang = data.optString("detectedLanguage", "Auto-detected")
-        val fullText = data.optString("fullText", "")
-
-        val topics = mutableListOf<String>()
-        val topicsArr = data.optJSONArray("keyTopics")
-        if (topicsArr != null) {
-            for (i in 0 until topicsArr.length()) {
-                topics.add(topicsArr.getString(i))
+        return try {
+            val root = JSONObject(jsonResponse)
+            val candidates = root.optJSONArray("candidates")
+            if (candidates == null || candidates.length() == 0) {
+                val errorMsg = root.optJSONObject("error")?.optString("message") ?: "No candidates returned from Gemini"
+                throw Exception(errorMsg)
             }
-        }
+            val candidate = candidates.getJSONObject(0)
+            val content = candidate.getJSONObject("content")
+            val rawText = content.getJSONArray("parts").getJSONObject(0).getString("text")
 
-        val segments = mutableListOf<TranscriptSegment>()
-        val segmentsArr = data.optJSONArray("segments")
-        if (segmentsArr != null) {
-            for (i in 0 until segmentsArr.length()) {
-                val segObj = segmentsArr.getJSONObject(i)
+            // Robust JSON extraction: clean markdown fences ```json ... ```
+            var cleanText = rawText.trim()
+            if (cleanText.startsWith("```json")) {
+                cleanText = cleanText.removePrefix("```json")
+            } else if (cleanText.startsWith("```")) {
+                cleanText = cleanText.removePrefix("```")
+            }
+            if (cleanText.endsWith("```")) {
+                cleanText = cleanText.removeSuffix("```")
+            }
+            cleanText = cleanText.trim()
+
+            val firstBrace = cleanText.indexOf('{')
+            val lastBrace = cleanText.lastIndexOf('}')
+            if (firstBrace >= 0 && lastBrace > firstBrace) {
+                cleanText = cleanText.substring(firstBrace, lastBrace + 1)
+            }
+
+            val data = JSONObject(cleanText)
+            val title = data.optString("title", fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"))
+            val detectedLang = data.optString("detectedLanguage", "Auto-detected")
+            val fullText = data.optString("fullText", "")
+
+            val topics = mutableListOf<String>()
+            val topicsArr = data.optJSONArray("keyTopics")
+            if (topicsArr != null) {
+                for (i in 0 until topicsArr.length()) {
+                    topics.add(topicsArr.getString(i))
+                }
+            }
+
+            val segments = mutableListOf<TranscriptSegment>()
+            val segmentsArr = data.optJSONArray("segments")
+            if (segmentsArr != null) {
+                for (i in 0 until segmentsArr.length()) {
+                    val segObj = segmentsArr.getJSONObject(i)
+                    segments.add(
+                        TranscriptSegment(
+                            id = UUID.randomUUID().toString(),
+                            speaker = segObj.optString("speaker", "Speaker 1"),
+                            startTimeMs = segObj.optLong("startTimeMs", 0L),
+                            endTimeMs = segObj.optLong("endTimeMs", 0L),
+                            text = segObj.optString("text", "")
+                        )
+                    )
+                }
+            }
+
+            if (segments.isEmpty() && fullText.isNotBlank()) {
                 segments.add(
                     TranscriptSegment(
                         id = UUID.randomUUID().toString(),
-                        speaker = segObj.optString("speaker", "Speaker 1"),
-                        startTimeMs = segObj.optLong("startTimeMs", 0L),
-                        endTimeMs = segObj.optLong("endTimeMs", 0L),
-                        text = segObj.optString("text", "")
+                        speaker = "Speaker 1",
+                        text = fullText
                     )
                 )
             }
-        }
 
-        if (segments.isEmpty() && fullText.isNotBlank()) {
-            segments.add(
-                TranscriptSegment(
-                    id = UUID.randomUUID().toString(),
-                    speaker = "Speaker 1",
-                    text = fullText
-                )
+            FileTranscriptionResult(
+                title = title,
+                fullText = fullText.ifBlank { segments.joinToString(" ") { it.text } },
+                segments = segments,
+                detectedLanguage = detectedLang,
+                keyTopics = topics
+            )
+        } catch (e: Exception) {
+            Log.e("GeminiTranscribeApi", "Error parsing response, falling back to raw text", e)
+            // If structured JSON fails, fallback to extracting text from raw response
+            val fallbackText = try {
+                val root = JSONObject(jsonResponse)
+                root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+            } catch (_: Exception) {
+                jsonResponse.take(500)
+            }
+
+            FileTranscriptionResult(
+                title = fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"),
+                fullText = fallbackText,
+                segments = listOf(
+                    TranscriptSegment(
+                        id = UUID.randomUUID().toString(),
+                        speaker = "Speaker 1",
+                        text = fallbackText
+                    )
+                ),
+                detectedLanguage = "Auto-detected",
+                keyTopics = emptyList()
             )
         }
+    }
 
-        return FileTranscriptionResult(
-            title = title,
-            fullText = fullText.ifBlank { segments.joinToString(" ") { it.text } },
-            segments = segments,
-            detectedLanguage = detectedLang,
-            keyTopics = topics
-        )
+    /**
+     * Performs Google Search Grounded fact checking and web verification on transcript
+     */
+    suspend fun performWebSearchGrounding(apiKey: String, transcriptText: String): Result<WebSearchGroundingResult> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(Exception("Gemini API key is required for Web Search."))
+        }
+
+        try {
+            val prompt = """
+                You are a research and fact-checking assistant. Analyze this transcript, verify facts and key entities using Google Search, and provide:
+                1. Fact Verification & Context (verify dates, names, facts or claims made in the transcript)
+                2. Related Information & Knowledge Summary
+                3. Key Sources & References
+
+                Transcript:
+                ${transcriptText.take(3500)}
+            """.trimIndent()
+
+            val requestBodyJson = JSONObject().apply {
+                val contents = JSONArray()
+                val contentObj = JSONObject()
+                val parts = JSONArray().apply {
+                    put(JSONObject().apply { put("text", prompt) })
+                }
+                contentObj.put("parts", parts)
+                contents.put(contentObj)
+                put("contents", contents)
+
+                // Add Google Search Tool
+                val tools = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("googleSearch", JSONObject())
+                    })
+                }
+                put("tools", tools)
+            }
+
+            val url = "$BASE_URL/v1beta/models/$MODEL_TEXT:generateContent?key=${apiKey.trim()}"
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBodyJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errorBody = response.body?.string().orEmpty()
+                    // Fallback without tools if googleSearch tool is restricted
+                    return@use fallbackSearchWithoutTool(apiKey, prompt)
+                }
+
+                val body = response.body?.string().orEmpty()
+                val root = JSONObject(body)
+                val candidate = root.getJSONArray("candidates").getJSONObject(0)
+                val text = candidate.getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+
+                val sources = mutableListOf<String>()
+                val groundingMetadata = candidate.optJSONObject("groundingMetadata")
+                if (groundingMetadata != null) {
+                    val chunks = groundingMetadata.optJSONArray("groundingChunks")
+                    if (chunks != null) {
+                        for (i in 0 until chunks.length()) {
+                            val chunk = chunks.getJSONObject(i)
+                            val web = chunk.optJSONObject("web")
+                            val title = web?.optString("title")
+                            val uri = web?.optString("uri")
+                            if (!uri.isNullOrBlank()) {
+                                sources.add("${title ?: "Web Source"}: $uri")
+                            }
+                        }
+                    }
+                }
+
+                Result.success(WebSearchGroundingResult(content = text, sources = sources))
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiTranscribeApi", "Error in performWebSearchGrounding", e)
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun fallbackSearchWithoutTool(apiKey: String, prompt: String): Result<WebSearchGroundingResult> = withContext(Dispatchers.IO) {
+        try {
+            val result = generateSimpleText(apiKey, prompt)
+            result.map { WebSearchGroundingResult(content = it, sources = listOf("Grounded via Google Gemini")) }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     /**
@@ -299,6 +465,10 @@ class GeminiTranscribeApiClient(
     }
 
     private suspend fun generateSimpleText(apiKey: String, prompt: String): Result<String> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(Exception("Gemini API key is required. Please set your key in Settings."))
+        }
+
         try {
             val requestBodyJson = JSONObject().apply {
                 val contents = JSONArray()
@@ -311,7 +481,7 @@ class GeminiTranscribeApiClient(
                 put("contents", contents)
             }
 
-            val url = "$BASE_URL/v1beta/models/$MODEL_FLASH:generateContent?key=${apiKey.trim()}"
+            val url = "$BASE_URL/v1beta/models/$MODEL_TEXT:generateContent?key=${apiKey.trim()}"
             val request = Request.Builder()
                 .url(url)
                 .post(requestBodyJson.toString().toRequestBody("application/json".toMediaType()))
@@ -319,7 +489,12 @@ class GeminiTranscribeApiClient(
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@withContext Result.failure(Exception("Gemini generation failed: ${response.code}"))
+                    val code = response.code
+                    val errorBody = response.body?.string().orEmpty()
+                    if (code == 401) {
+                        return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key."))
+                    }
+                    return@withContext Result.failure(Exception("Gemini request failed ($code): ${parseErrorMessage(errorBody)}"))
                 }
                 val body = response.body?.string().orEmpty()
                 val root = JSONObject(body)
@@ -339,9 +514,17 @@ class GeminiTranscribeApiClient(
     private fun parseErrorMessage(errorBody: String): String {
         return try {
             val json = JSONObject(errorBody)
-            json.optJSONObject("error")?.optString("message") ?: errorBody
+            val errObj = json.optJSONObject("error")
+            if (errObj != null) {
+                val msg = errObj.optString("message")
+                val status = errObj.optString("status")
+                if (msg.isNotBlank()) {
+                    return if (status.isNotBlank()) "$msg ($status)" else msg
+                }
+            }
+            errorBody.take(150)
         } catch (_: Exception) {
-            errorBody.take(100)
+            errorBody.take(150)
         }
     }
 }

@@ -56,6 +56,16 @@ data class FileTranscriptionUiState(
     val errorMessage: String? = null
 )
 
+enum class HistoryFilter { ALL, LIVE, FILES }
+
+data class WebSearchUiState(
+    val isSearching: Boolean = false,
+    val result: com.blindtechnexus.audiotranscriber.data.remote.WebSearchGroundingResult? = null,
+    val activeTitle: String? = null,
+    val errorMessage: String? = null
+)
+
+@OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(
     application: Application,
     private val transcriptRepository: TranscriptRepository = (application as AudioTranscriberApplication).transcriptRepository,
@@ -79,23 +89,42 @@ class MainViewModel(
     private val _historySearchQuery = MutableStateFlow("")
     val historySearchQuery: StateFlow<String> = _historySearchQuery.asStateFlow()
 
+    private val _historyFilter = MutableStateFlow(HistoryFilter.ALL)
+    val historyFilter: StateFlow<HistoryFilter> = _historyFilter.asStateFlow()
+
+    private val _showApiKeyMissingDialog = MutableStateFlow(false)
+    val showApiKeyMissingDialog: StateFlow<Boolean> = _showApiKeyMissingDialog.asStateFlow()
+
+    private val _webSearchState = MutableStateFlow(WebSearchUiState())
+    val webSearchState: StateFlow<WebSearchUiState> = _webSearchState.asStateFlow()
+
     val userPreferences = preferencesManager
-    val hasApiKey: StateFlow<Boolean> = MutableStateFlow(secureKeyStorage.hasValidApiKey())
+    private val _hasApiKey = MutableStateFlow(secureKeyStorage.hasValidApiKey())
+    val hasApiKey: StateFlow<Boolean> = _hasApiKey.asStateFlow()
 
     private var timerJob: Job? = null
     private var streamingCollectionJob: Job? = null
 
-    // Room Database backed history flow
-    val allTranscripts: StateFlow<List<Transcript>> = _historySearchQuery
-        .debounce(300)
-        .flatMapLatest { query ->
-            if (query.isBlank()) {
-                transcriptRepository.allTranscripts
-            } else {
-                transcriptRepository.searchTranscripts(query)
+    // Room Database backed history flow with filter and search
+    val allTranscripts: StateFlow<List<Transcript>> = combine(
+        _historySearchQuery.debounce(300),
+        _historyFilter
+    ) { query, filter ->
+        query to filter
+    }.flatMapLatest { (query, filter) ->
+        val baseFlow = if (query.isBlank()) {
+            transcriptRepository.allTranscripts
+        } else {
+            transcriptRepository.searchTranscripts(query)
+        }
+        baseFlow.map { list ->
+            when (filter) {
+                HistoryFilter.ALL -> list
+                HistoryFilter.LIVE -> list.filter { it.isLive }
+                HistoryFilter.FILES -> list.filter { !it.isLive }
             }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         // Observe AudioRecord amplitude and speech detection
@@ -128,12 +157,24 @@ class MainViewModel(
         }
     }
 
+    fun refreshApiKeyStatus() {
+        _hasApiKey.value = secureKeyStorage.hasValidApiKey()
+    }
+
+    fun dismissApiKeyMissingDialog() {
+        _showApiKeyMissingDialog.value = false
+    }
+
     fun selectTab(tab: MainTab) {
         _selectedTab.value = tab
     }
 
     fun setHistorySearchQuery(query: String) {
         _historySearchQuery.value = query
+    }
+
+    fun setHistoryFilter(filter: HistoryFilter) {
+        _historyFilter.value = filter
     }
 
     // --- Live Transcription Actions ---
@@ -147,6 +188,12 @@ class MainViewModel(
     }
 
     fun startLiveRecording() {
+        refreshApiKeyStatus()
+        if (!_hasApiKey.value) {
+            _showApiKeyMissingDialog.value = true
+            return
+        }
+
         val apiKey = secureKeyStorage.getApiKey()
         val config = preferencesManager.transcriptionConfig.value
 
@@ -190,6 +237,9 @@ class MainViewModel(
                     }
                     is LiveTranscriptionEvent.Interrupted -> {
                         commitCurrentStreamingText()
+                    }
+                    is LiveTranscriptionEvent.ErrorEvent -> {
+                        // Handled in connectionState
                     }
                 }
             }
@@ -367,6 +417,12 @@ class MainViewModel(
     }
 
     fun transcribeSelectedFile() {
+        refreshApiKeyStatus()
+        if (!_hasApiKey.value) {
+            _showApiKeyMissingDialog.value = true
+            return
+        }
+
         val state = _fileUiState.value
         val bytes = state.selectedFileBytes ?: return
         val fileName = state.selectedFileName ?: "audio_file"
@@ -455,6 +511,47 @@ class MainViewModel(
         }
     }
 
+    // --- Web Search Grounding & Fact-Checking ---
+
+    fun performWebSearchGroundingForCurrentFile() {
+        val text = _fileUiState.value.result?.fullText ?: return
+        val title = _fileUiState.value.result?.title ?: "Transcript"
+        val apiKey = secureKeyStorage.getApiKey()
+
+        viewModelScope.launch {
+            _webSearchState.value = WebSearchUiState(isSearching = true, activeTitle = title)
+            val res = apiClient.performWebSearchGrounding(apiKey, text)
+            res.fold(
+                onSuccess = { result ->
+                    _webSearchState.value = WebSearchUiState(isSearching = false, result = result, activeTitle = title)
+                },
+                onFailure = { err ->
+                    _webSearchState.value = WebSearchUiState(isSearching = false, errorMessage = err.message, activeTitle = title)
+                }
+            )
+        }
+    }
+
+    fun performWebSearchGroundingForTranscript(transcript: Transcript) {
+        val apiKey = secureKeyStorage.getApiKey()
+        viewModelScope.launch {
+            _webSearchState.value = WebSearchUiState(isSearching = true, activeTitle = transcript.title)
+            val res = apiClient.performWebSearchGrounding(apiKey, transcript.fullText)
+            res.fold(
+                onSuccess = { result ->
+                    _webSearchState.value = WebSearchUiState(isSearching = false, result = result, activeTitle = transcript.title)
+                },
+                onFailure = { err ->
+                    _webSearchState.value = WebSearchUiState(isSearching = false, errorMessage = err.message, activeTitle = transcript.title)
+                }
+            )
+        }
+    }
+
+    fun dismissWebSearchDialog() {
+        _webSearchState.value = WebSearchUiState()
+    }
+
     fun setFileSearchQuery(query: String) {
         _fileUiState.update { it.copy(searchQuery = query) }
     }
@@ -489,5 +586,27 @@ class MainViewModel(
         getApplication<Application>().startActivity(Intent.createChooser(intent, "Share Transcript via").apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         })
+    }
+
+    fun generateSrtContent(transcript: Transcript): String {
+        val sb = StringBuilder()
+        transcript.segments.forEachIndexed { index, seg ->
+            sb.append("${index + 1}\n")
+            sb.append("${formatSrtTimestamp(seg.startTimeMs)} --> ${formatSrtTimestamp(seg.endTimeMs)}\n")
+            sb.append("[${seg.speaker}] ${seg.text}\n\n")
+        }
+        if (transcript.segments.isEmpty()) {
+            sb.append("1\n00:00:00,000 --> 00:00:10,000\n${transcript.fullText}\n")
+        }
+        return sb.toString()
+    }
+
+    private fun formatSrtTimestamp(ms: Long): String {
+        val totalSec = ms / 1000
+        val millis = ms % 1000
+        val hours = totalSec / 3600
+        val mins = (totalSec % 3600) / 60
+        val secs = totalSec % 60
+        return String.format("%02d:%02d:%02d,%03d", hours, mins, secs, millis)
     }
 }

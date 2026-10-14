@@ -26,8 +26,15 @@
     <string name="api_key_step_3">3. Click \"Get API key\" and create a new key</string>
     <string name="api_key_step_4">4. Copy and paste the key here</string>
     <string name="btn_get_started">Get Started</string>
-    <string name="btn_explore_demo">Explore Demo Mode</string>
+    <string name="btn_explore_demo">Skip for now</string>
     <string name="banner_api_key_required">API Key Required: You are exploring in Demo Mode. Add your API key in Settings to transcribe.</string>
+    <string name="api_key_required_dialog_title">Gemini API Key Required</string>
+    <string name="api_key_required_dialog_desc">An API key is required to perform speech transcription. You can get a free API key from Google AI Studio and configure it in Settings.</string>
+    <string name="api_key_required_dialog_open_settings">Open Settings</string>
+    <string name="api_key_required_dialog_dismiss">Cancel</string>
+    <string name="action_web_search">Web Search &amp; Verify</string>
+    <string name="action_web_search_desc">Verify facts and search related information with Google Search</string>
+    <string name="action_copy_success">Transcript copied to clipboard</string>
 
     <!-- Navigation -->
     <string name="nav_live">Live</string>

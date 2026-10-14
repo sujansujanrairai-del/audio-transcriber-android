@@ -46,7 +46,8 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val navController = rememberNavController()
                     val hasKey = remember { app.secureKeyStorage.hasValidApiKey() }
-                    val startDestination = if (hasKey) Screen.Main.route else Screen.Welcome.route
+                    val isWelcomeCompleted = remember { app.userPreferencesManager.isWelcomeCompleted() }
+                    val startDestination = if (isWelcomeCompleted || hasKey) Screen.Main.route else Screen.Welcome.route
 
                     // Runtime Permission Request for Microphone and Notifications
                     var hasMicPermission by remember {
@@ -78,7 +79,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         composable(Screen.Welcome.route) {
                             val welcomeVm: WelcomeViewModel = viewModel {
-                                WelcomeViewModel(app.secureKeyStorage)
+                                WelcomeViewModel(app.secureKeyStorage, app.userPreferencesManager)
                             }
                             WelcomeScreen(
                                 viewModel = welcomeVm,
