@@ -24,19 +24,21 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Run unit tests
         run: ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest
@@ -103,7 +105,7 @@ jobs:
           done
 
       - name: Upload armeabi-v7a APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audio-transcriber-release-armeabi-v7a-unsigned
           path: release-artifacts/armeabi-v7a/*.apk
@@ -111,7 +113,7 @@ jobs:
           retention-days: 30
 
       - name: Upload arm64-v8a APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audio-transcriber-release-arm64-v8a-unsigned
           path: release-artifacts/arm64-v8a/*.apk
@@ -119,7 +121,7 @@ jobs:
           retention-days: 30
 
       - name: Upload x86 APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audio-transcriber-release-x86-unsigned
           path: release-artifacts/x86/*.apk
@@ -127,7 +129,7 @@ jobs:
           retention-days: 30
 
       - name: Upload x86_64 APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audio-transcriber-release-x86_64-unsigned
           path: release-artifacts/x86_64/*.apk
