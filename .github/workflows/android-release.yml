@@ -52,15 +52,18 @@ jobs:
         run: |
           log_file="$RUNNER_TEMP/gradle-test.log"
           if [[ -f "$log_file" ]]; then
-            failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
-            diagnostics="$(grep -E '^(e: |w: |> Task .* FAILED)' "$log_file" | tail -n 12 || true)"
-            if [[ -n "$failure_line" ]]; then
-              failure_end=$((failure_line + 24))
-              failure_details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
+            test_failures="$(python3 .github/scripts/summarize_test_failures.py)"
+            if [[ -n "$test_failures" ]]; then
+              details="$test_failures"
             else
-              failure_details="$(tail -n 24 "$log_file")"
+              failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
+              if [[ -n "$failure_line" ]]; then
+                failure_end=$((failure_line + 18))
+                details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
+              else
+                details="$(tail -n 18 "$log_file")"
+              fi
             fi
-            details="$(printf '%s\n%s\n' "$diagnostics" "$failure_details")"
             details="${details:0:3500}"
             {
               echo '### Gradle unit test failure details'
