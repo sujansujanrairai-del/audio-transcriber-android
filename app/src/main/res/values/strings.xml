@@ -1,0 +1,87 @@
+<resources>
+    <string name="app_name">Transcend</string>
+    <string name="tagline">Turn Every Voice into Text</string>
+    <string name="developer_credit">Developed by Sujan Rai • Nepal</string>
+
+    <!-- Onboarding / Welcome Screen -->
+    <string name="welcome_headline">Real-time Intelligence for Every Voice</string>
+    <string name="welcome_subheadline">Powered by Gemini 3.5 Transcribe with 4.0% WER live streaming and 2.6% WER pre-recorded audio accuracy across 85+ languages.</string>
+    <string name="feature_realtime_title">Real-Time Live Transcription</string>
+    <string name="feature_realtime_desc">Instant, low-latency transcription via Gemini Live streaming WebSocket with smart filler word removal.</string>
+    <string name="feature_languages_title">85+ Supported Languages</string>
+    <string name="feature_languages_desc">Automatic language detection with custom vocabulary injection for niche terminology.</string>
+    <string name="feature_diarization_title">Speaker Identification</string>
+    <string name="feature_diarization_desc">Diarization for up to 8 distinct speakers with word-level timestamps and timeline navigation.</string>
+
+    <string name="api_key_card_title">Gemini API Key Setup</string>
+    <string name="api_key_card_desc">Transcend uses your own Gemini API key. It is stored securely in hardware-backed EncryptedSharedPreferences (AES-256).</string>
+    <string name="api_key_hint">Paste your Gemini API key (e.g. AIzaSy...)</string>
+    <string name="api_key_validate_button">Validate &amp; Save Key</string>
+    <string name="api_key_validating">Validating key with Gemini...</string>
+    <string name="api_key_valid">Key verified successfully!</string>
+    <string name="api_key_invalid">Invalid API key. Please check your key from Google AI Studio.</string>
+    <string name="api_key_how_to_title">How to get your Gemini API key</string>
+    <string name="api_key_step_1">1. Visit Google AI Studio (aistudio.google.com)</string>
+    <string name="api_key_step_2">2. Sign in with your Google account</string>
+    <string name="api_key_step_3">3. Click \"Get API key\" and create a new key</string>
+    <string name="api_key_step_4">4. Copy and paste the key here</string>
+    <string name="btn_get_started">Get Started</string>
+    <string name="btn_explore_demo">Explore Demo Mode</string>
+    <string name="banner_api_key_required">API Key Required: You are exploring in Demo Mode. Add your API key in Settings to transcribe.</string>
+
+    <!-- Navigation -->
+    <string name="nav_live">Live</string>
+    <string name="nav_files">Files</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Live Transcription -->
+    <string name="live_start_recording">Start Live Recording</string>
+    <string name="live_stop_recording">Stop Recording</string>
+    <string name="live_pause_recording">Pause</string>
+    <string name="live_resume_recording">Resume</string>
+    <string name="live_clear">Clear Session</string>
+    <string name="live_save">Save Transcript</string>
+    <string name="live_recording_active">Recording in progress...</string>
+    <string name="live_recording_paused">Recording paused</string>
+    <string name="live_recording_idle">Tap the microphone to start real-time transcription</string>
+    <string name="live_session_limit_warning">Session approaching 10-minute limit (9+ mins). Consider saving to preserve history.</string>
+    <string name="live_session_limit_reached">10-minute session limit reached. Session saved automatically.</string>
+    <string name="live_vad_active">Speech detected</string>
+    <string name="live_vad_silence">Silence / Standby</string>
+
+    <!-- File Transcription -->
+    <string name="file_pick_audio">Select Audio File</string>
+    <string name="file_supported_formats">Supports MP3, WAV, M4A, OGG, FLAC, AAC (up to 1 hour)</string>
+    <string name="file_transcribing">Processing audio with Gemini 3.5 Transcribe...</string>
+    <string name="file_speaker_diarization">Speaker Diarization (up to 8 speakers)</string>
+    <string name="file_word_timestamps">Word-level Timestamps</string>
+    <string name="file_diarization_warning">Note: Enabling speaker diarization or word timestamps limits processing to 30 minutes.</string>
+    <string name="file_upload_btn">Upload &amp; Transcribe</string>
+
+    <!-- Tools & Actions -->
+    <string name="action_summarize">Summarize with Gemini</string>
+    <string name="action_translate">Real-Time Translation</string>
+    <string name="action_export">Export Transcript</string>
+    <string name="action_copy">Copy to Clipboard</string>
+    <string name="action_search">Search transcript</string>
+    <string name="action_filter">Filter transcripts</string>
+    <string name="action_custom_vocab">Custom Vocabulary</string>
+    <string name="action_delete">Delete</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Transcend Settings</string>
+    <string name="settings_section_transcription">Transcription Configuration</string>
+    <string name="settings_section_audio">Audio &amp; Voice Detection (VAD)</string>
+    <string name="settings_section_appearance">Appearance &amp; Themes</string>
+    <string name="settings_section_accessibility">Deep Accessibility</string>
+    <string name="settings_section_data">Data, Privacy &amp; Keys</string>
+    <string name="settings_section_about">About Transcend</string>
+
+    <!-- Accessibility Descriptions -->
+    <string name="cd_mic_button">Microphone button to toggle real-time transcription</string>
+    <string name="cd_speaker_badge">Identified speaker</string>
+    <string name="cd_audio_visualizer">Live audio waveform visualizer</string>
+    <string name="cd_settings_btn">Open app settings</string>
+    <string name="cd_api_status">API key status indicator</string>
+</resources>
