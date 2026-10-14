@@ -55,6 +55,21 @@ app/src/main/java/com/blindtechnexus/audiotranscriber/
     └── settings/                 # Customization engine (VAD, Themes, Key rotation)
 ```
 
+The Android namespace and application ID are `com.blindtechnexus.audiotranscriber`.
+
+---
+
+## 📦 Building production APKs
+
+The production `release` build is intentionally unsigned and split into four ABI-specific APKs: `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`. A JDK 21 installation is required to run the unit tests with the SDK 36 Robolectric configuration.
+
+```bash
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleRelease
+```
+
+The APKs are written to `app/build/outputs/apk/release/`. The GitHub Actions workflow at `.github/workflows/android-ci.yml` builds and tests the app for pull requests, pushes to `main`, and manual dispatches, then uploads one downloadable artifact per ABI. Release artifacts are unsigned and must be signed by the distributor before installation or publishing.
+
 ---
 
 ## 🔑 Gemini API Key Security
@@ -95,27 +110,3 @@ wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.
 * **Heading Semantics:** Speaker changes are tagged with `heading()` for TalkBack jump navigation.
 * **Touch Targets:** Standardized to at least 48dp × 48dp, with an "Expanded Touch Targets" mode increasing interactive components to 56dp.
 * **Contrast & Color-Blind Modes:** Contrast ratios exceed WCAG AA/AAA with dedicated palettes for Protanopia, Deuteranopia, and Tritanopia.
-
----
-
-## 📦 Building & CI Releases
-
-**App ID:** `com.blindtechnexus.audiotranscriber` • **App name:** Audio Transcriber
-
-GitHub Actions (`.github/workflows/android-ci.yml`) builds the production
-release on every push / pull request:
-
-```bash
-./gradlew testDebugUnitTest   # JVM unit tests
-./gradlew assembleRelease     # 64-bit + 32-bit + universal APKs in one run
-./ci/package_release_archives.sh app/build/outputs/apk/release release-artifacts
-```
-
-ABI splits produce one unsigned APK per architecture plus a universal APK
-(`app-arm64-v8a-release-unsigned.apk`, `app-armeabi-v7a-release-unsigned.apk`,
-`app-universal-release-unsigned.apk`). No signing configuration is kept in the
-build: CI packages each APK into its own downloadable artifact —
-`Audio-Transcriber-x64-release.zip`, `Audio-Transcriber-32-bit-release.zip`,
-and `Audio-Transcriber-universal-release.zip` (with `SHA256SUMS.txt`) —
-retained for 30 days. Sign an APK with your own keystore (e.g. `apksigner
-sign`) before distributing it.

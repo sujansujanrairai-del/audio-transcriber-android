@@ -22,21 +22,19 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  // No signingConfigs are defined on purpose: CI builds UNSIGNED release APKs
-  // (app-*-release-unsigned.apk). Sign an APK locally / at distribution time with
-  // your own keystore (e.g. `apksigner sign`) before publishing it. The debug
-  // build type keeps the Android Gradle Plugin's auto-generated debug key.
+  // Release variants intentionally have no keystore configuration, so CI builds
+  // unsigned APKs. Sign an APK locally or at distribution time with your own
+  // keystore (e.g. `apksigner sign`) before publishing it.
 
-  // One APK per ABI plus a universal APK that bundles every ABI. A single
-  // `assembleRelease` invocation emits all of them into
-  // app/build/outputs/apk/release, and CI packages each one into its own
-  // architecture archive (see ci/package_release_archives.sh).
+  // Produce one unsigned release APK per supported Android CPU architecture.
+  // A universal APK is deliberately disabled so CI can verify and publish each
+  // architecture-specific APK independently.
   splits {
     abi {
       isEnable = true
       reset()
-      include("arm64-v8a", "armeabi-v7a")
-      isUniversalApk = true
+      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+      isUniversalApk = false
     }
   }
 
@@ -45,10 +43,10 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Deliberately no signingConfig: release output stays unsigned.
+      // Release output is left unsigned.
     }
     debug {
-      // No explicit signingConfig: AGP's default debug key is used.
+      // Debug uses the Android Gradle Plugin's default debug key.
     }
   }
   compileOptions {

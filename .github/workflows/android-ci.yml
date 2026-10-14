@@ -1,195 +1,228 @@
-name: Android CI
+name: Android CI and Release APKs
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
-    branches: ["**"]
+    branches:
+      - main
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8"
-  ORG_GRADLE_PROJECT_org.gradle.caching: "true"
-  ORG_GRADLE_PROJECT_org.gradle.parallel: "true"
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Test and build unsigned ABI APKs
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@v7
 
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
         with:
-          # JDK 21 (not 17): Robolectric's SDK 36 sandbox, used by the JVM
-          # tests for this app's target SDK, requires a Java 21 runtime.
-          # Gradle 9 / AGP 9 / Kotlin 2.2 all run on 21.
+          distribution: temurin
           java-version: '21'
-          distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
         with:
-          # This app compiles against API 36.1 (compileSdk 36, minorApiLevel 1),
-          # so the 36.1 platform is required in addition to the base 36 platform.
           packages: 'platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0'
           accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: true
 
-      - name: Make gradlew executable
-        run: chmod +x gradlew
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
-      - name: Download Gradle Wrapper jar (if missing)
-        run: |
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Downloading Gradle Wrapper jar..."
-            curl --fail --location --retry 3 --retry-delay 2 \
-              https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradle/wrapper/gradle-wrapper.jar \
-              -o gradle/wrapper/gradle-wrapper.jar
-            test -s gradle/wrapper/gradle-wrapper.jar
-            jar tf gradle/wrapper/gradle-wrapper.jar >/dev/null
-          else
-            echo "Gradle Wrapper jar already exists."
-          fi
-
-      - name: Run JVM unit tests
+      - name: Run unit tests
         shell: bash
         run: |
-          set +e
-          ./gradlew testDebugUnitTest --parallel --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-test.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            # Test failures are also republished as one workflow annotation: the
-            # check run alone is then enough to see what broke, without
-            # downloading anything.
-            {
-              grep -E '^e: ' /tmp/gradle-test.log || true
-              grep -E 'error:|FAILURE:|Execution failed|What went wrong|Caused by|> Task .* FAILED|FAILED$' /tmp/gradle-test.log || true
-              # Gradle's console only names the failing tests; the actual
-              # assertion / stack trace lives in the JUnit XML reports, so
-              # republish those too (check run stays self-explanatory).
-              grep -h -A 15 -E '<failure|<error' app/build/test-results/testDebugUnitTest/*.xml || true
-            } | head -n 120 > /tmp/test-problems.txt
-            cat /tmp/test-problems.txt
-            message=$(cat /tmp/test-problems.txt)
-            message=${message//'%'/'%25'}
-            message=${message//$'\r'/}
-            message=${message//$'\n'/'%0A'}
-            if [ -n "$message" ]; then
-              echo "::error title=Unit tests failed::${message}"
-            else
-              echo "::error title=Unit tests failed::No test errors found in the log; see the job log."
-            fi
-          fi
-          exit "$status"
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --console=plain :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/gradle-test.log"
 
-      - name: Build 32-bit, 64-bit, and universal unsigned release APKs
-        # ABI splits and the universal output share one Gradle invocation and
-        # dependency resolution. No signingConfig is configured anywhere, so
-        # every APK emitted here is unsigned (…-release-unsigned.apk).
+      - name: Surface unit test failure details
+        if: failure()
         shell: bash
         run: |
-          set +e
-          ./gradlew assembleRelease --parallel --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-build.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            # Build logs live in a storage host that some networks cannot reach, so the compiler
-            # errors are also republished as one workflow annotation: the check run alone is then
-            # enough to see what broke, without downloading anything.
-            {
-              grep -E '^e: ' /tmp/gradle-build.log || true
-              grep -E 'error:|FAILURE:|Execution failed|What went wrong|Caused by|> Task .* FAILED' /tmp/gradle-build.log || true
-            } | head -n 80 > /tmp/build-problems.txt
-            message=$(cat /tmp/build-problems.txt)
-            message=${message//'%'/'%25'}
-            message=${message//$'\r'/}
-            message=${message//$'\n'/'%0A'}
-            if [ -n "$message" ]; then
-              echo "::error title=Gradle build failed::${message}"
+          log_file="$RUNNER_TEMP/gradle-test.log"
+          if [[ -f "$log_file" ]]; then
+            test_failures="$(python3 .github/scripts/summarize_test_failures.py)"
+            if [[ -n "$test_failures" ]]; then
+              details="$test_failures"
             else
-              echo "::error title=Gradle build failed::No compiler errors found in the log; see the job log."
+              failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
+              if [[ -n "$failure_line" ]]; then
+                failure_end=$((failure_line + 18))
+                details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
+              else
+                details="$(tail -n 18 "$log_file")"
+              fi
             fi
+            details="${details:0:3500}"
+            {
+              echo '### Gradle unit test failure details'
+              echo '```text'
+              printf '%s\n' "$details"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\n'/'%0A'}"
+            details="${details//$'\r'/'%0D'}"
+            echo "::error file=.github/workflows/android-ci.yml,line=65,title=Gradle unit tests failed::$details"
           fi
-          exit "$status"
 
-      - name: Verify unsigned per-architecture APKs
+      - name: Assemble production release APKs
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --console=plain :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/gradle-release.log"
+
+      - name: Surface release build failure details
+        if: failure()
+        shell: bash
+        run: |
+          log_file="$RUNNER_TEMP/gradle-release.log"
+          if [[ -f "$log_file" ]]; then
+            failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
+            diagnostics="$(grep -E '^(e: |w: |> Task .* FAILED)' "$log_file" | tail -n 12 || true)"
+            if [[ -n "$failure_line" ]]; then
+              failure_end=$((failure_line + 24))
+              failure_details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
+            else
+              failure_details="$(tail -n 24 "$log_file")"
+            fi
+            details="$(printf '%s\n%s\n' "$diagnostics" "$failure_details")"
+            details="${details:0:3500}"
+            {
+              echo '### Gradle release build failure details'
+              echo '```text'
+              printf '%s\n' "$details"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\n'/'%0A'}"
+            details="${details//$'\r'/'%0D'}"
+            echo "::error file=.github/workflows/android-ci.yml,line=104,title=Gradle release build failed::$details"
+          fi
+
+      - name: Verify ABI APKs are present and unsigned
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== Release APK outputs ==="
-          ls -lh app/build/outputs/apk/release
-          for abi in arm64-v8a armeabi-v7a universal; do
-            apk=$(find app/build/outputs/apk/release -maxdepth 1 -name "*${abi}*.apk" | head -n 1)
-            if [ -z "$apk" ]; then
-              echo "::error title=Missing APK::No ${abi} release APK was produced."
+
+          output_dir="app/build/outputs/apk/release"
+          artifact_dir="release-artifacts"
+          expected_abis=(armeabi-v7a arm64-v8a x86 x86_64)
+
+          if [[ ! -d "$output_dir" ]]; then
+            echo "::error::Gradle did not create the release APK output directory: $output_dir"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          apks=("$output_dir"/*.apk)
+          if [[ ${#apks[@]} -ne ${#expected_abis[@]} ]]; then
+            echo "::error::Expected ${#expected_abis[@]} ABI APKs, found ${#apks[@]}"
+            printf 'Found: %s\n' "${apks[@]:-none}"
+            exit 1
+          fi
+
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$sdk_root" || ! -d "$sdk_root/build-tools" ]]; then
+            echo "::error::Android SDK build-tools were not found"
+            exit 1
+          fi
+          mapfile -t apksigners < <(find "$sdk_root/build-tools" -type f -name apksigner -print | sort -V)
+          if [[ ${#apksigners[@]} -eq 0 ]]; then
+            echo "::error::apksigner was not found in the Android SDK build-tools"
+            exit 1
+          fi
+          apksigner="${apksigners[${#apksigners[@]}-1]}"
+
+          mkdir -p "$artifact_dir"
+          for abi in "${expected_abis[@]}"; do
+            matches=("$output_dir"/*-"$abi"-release-unsigned.apk)
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              echo "::error::Expected exactly one release APK for $abi, found ${#matches[@]}"
+              printf 'Matches: %s\n' "${matches[@]:-none}"
               exit 1
             fi
-            case "$apk" in
-              *-unsigned.apk) echo "OK (unsigned): $apk" ;;
-              *) echo "::error title=Unexpectedly signed APK::Expected an unsigned APK for ${abi}, got: $apk"; exit 1 ;;
-            esac
+
+            source_apk="${matches[0]}"
+            if [[ "$source_apk" != *-unsigned.apk ]]; then
+              echo "::error::Expected an unsigned APK filename for $abi, got $source_apk"
+              exit 1
+            fi
+
+            destination_dir="$artifact_dir/$abi"
+            destination_apk="$destination_dir/audio-transcriber-$abi-unsigned.apk"
+            mkdir -p "$destination_dir"
+            unzip -tq "$source_apk"
+
+            if "$apksigner" verify "$source_apk" >/dev/null 2>&1; then
+              echo "::error::Expected an unsigned release APK, but $source_apk has a valid signature"
+              exit 1
+            fi
+
+            cp "$source_apk" "$destination_apk"
+            echo "Prepared unsigned $abi APK: $destination_apk"
           done
 
-      - name: Package one release archive per architecture
-        # Each ABI split and the universal APK get their OWN archive: a 64-bit
-        # zip, a 32-bit zip and a universal zip. Nothing is merged into one
-        # bundle any more.
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x ci/package_release_archives.sh
-          ./ci/package_release_archives.sh app/build/outputs/apk/release release-artifacts
-          echo "=== Release archives ==="
-          ls -lh release-artifacts
-
-      - name: Publish release archive checksums to the job summary
+      - name: Publish release APK summary
         shell: bash
         run: |
           {
-            echo "### Release archives"
-            echo ""
-            echo "Unsigned release APKs for \`com.blindtechnexus.audiotranscriber\` (Audio Transcriber). Sign with your own keystore before distribution."
-            echo ""
-            echo "| Archive | Architecture |"
-            echo "| --- | --- |"
-            echo "| \`Audio-Transcriber-x64-release.zip\` | 64-bit ARM (\`arm64-v8a\`) |"
-            echo "| \`Audio-Transcriber-32-bit-release.zip\` | 32-bit ARM (\`armeabi-v7a\`) |"
-            echo "| \`Audio-Transcriber-universal-release.zip\` | universal ARM (\`arm64-v8a\` + \`armeabi-v7a\`) |"
-            echo ""
-            echo '```'
-            cat release-artifacts/SHA256SUMS.txt
-            echo '```'
+            echo '### Audio Transcriber release APKs'
+            echo
+            echo 'Application ID: `com.blindtechnexus.audiotranscriber`'
+            echo
+            echo 'All APKs are unsigned; sign them with a distributor-owned key before installation or publishing.'
+            echo
+            echo '| ABI | SHA-256 |'
+            echo '| --- | --- |'
+            for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+              apk="release-artifacts/$abi/audio-transcriber-$abi-unsigned.apk"
+              printf '| `%s` | `%s` |\n' "$abi" "$(sha256sum "$apk" | cut -d' ' -f1)"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload 64-bit ARM (arm64-v8a) release archive
-        uses: actions/upload-artifact@v4
+      - name: Upload armeabi-v7a APK
+        uses: actions/upload-artifact@v7
         with:
-          name: Audio-Transcriber-x64-release
-          path: release-artifacts/Audio-Transcriber-x64-release.zip
+          name: audio-transcriber-release-armeabi-v7a-unsigned
+          path: release-artifacts/armeabi-v7a/*.apk
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0
 
-      - name: Upload 32-bit ARM (armeabi-v7a) release archive
-        uses: actions/upload-artifact@v4
+      - name: Upload arm64-v8a APK
+        uses: actions/upload-artifact@v7
         with:
-          name: Audio-Transcriber-32-bit-release
-          path: release-artifacts/Audio-Transcriber-32-bit-release.zip
+          name: audio-transcriber-release-arm64-v8a-unsigned
+          path: release-artifacts/arm64-v8a/*.apk
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0
 
-      - name: Upload universal release archive (all architectures)
-        uses: actions/upload-artifact@v4
+      - name: Upload x86 APK
+        uses: actions/upload-artifact@v7
         with:
-          name: Audio-Transcriber-universal-release
-          path: release-artifacts/Audio-Transcriber-universal-release.zip
+          name: audio-transcriber-release-x86-unsigned
+          path: release-artifacts/x86/*.apk
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-transcriber-release-x86_64-unsigned
+          path: release-artifacts/x86_64/*.apk
+          if-no-files-found: error
+          retention-days: 30
