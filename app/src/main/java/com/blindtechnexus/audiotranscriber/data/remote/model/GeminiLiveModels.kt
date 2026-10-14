@@ -2,7 +2,8 @@ package com.blindtechnexus.audiotranscriber.data.remote.model
 
 import org.json.JSONArray
 import org.json.JSONObject
-import android.util.Base64
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 object GeminiLiveProtocol {
 
@@ -50,8 +51,12 @@ object GeminiLiveProtocol {
     /**
      * Packages raw 16-bit PCM bytes into realtimeInput mediaChunks
      */
+    @OptIn(ExperimentalEncodingApi::class)
     fun createAudioChunkMessage(pcmData: ByteArray): String {
-        val base64Data = Base64.encodeToString(pcmData, Base64.NO_WRAP)
+        // Kotlin stdlib Base64 (no line wrapping): identical output to
+        // android.util.Base64.NO_WRAP, but also runnable in JVM unit tests
+        // and on every supported API level (java.util.Base64 needs API 26+).
+        val base64Data = Base64.encode(pcmData)
 
         val mediaChunk = JSONObject().apply {
             put("mimeType", "audio/pcm;rate=16000")

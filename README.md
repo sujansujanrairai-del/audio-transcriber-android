@@ -68,7 +68,7 @@ The production `release` build is intentionally unsigned and split into four ABI
 ./gradlew :app:assembleRelease
 ```
 
-The APKs are written to `app/build/outputs/apk/release/`. The GitHub Actions workflow at `.github/workflows/android-release.yml` builds and tests the app for pull requests, pushes to `main`, and manual dispatches, then uploads one downloadable artifact per ABI. Release artifacts are unsigned and must be signed by the distributor before installation or publishing.
+The APKs are written to `app/build/outputs/apk/release/`. The GitHub Actions workflow at `.github/workflows/android-ci.yml` builds and tests the app for pull requests, pushes to `main`, and manual dispatches, then uploads one downloadable artifact per ABI. Release artifacts are unsigned and must be signed by the distributor before installation or publishing.
 
 ---
 

@@ -12,17 +12,6 @@ android {
   namespace = "com.blindtechnexus.audiotranscriber"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
-  // Keep production APKs split by supported Android CPU architecture. Release variants remain
-  // unsigned because no release signing configuration is supplied.
-  splits {
-    abi {
-      isEnable = true
-      reset()
-      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-      isUniversalApk = false
-    }
-  }
-
   defaultConfig {
     applicationId = "com.blindtechnexus.audiotranscriber"
     minSdk = 24
@@ -33,11 +22,31 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
+  // Release variants intentionally have no keystore configuration, so CI builds
+  // unsigned APKs. Sign an APK locally or at distribution time with your own
+  // keystore (e.g. `apksigner sign`) before publishing it.
+
+  // Produce one unsigned release APK per supported Android CPU architecture.
+  // A universal APK is deliberately disabled so CI can verify and publish each
+  // architecture-specific APK independently.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+      isUniversalApk = false
+    }
+  }
+
   buildTypes {
     release {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      // Release output is left unsigned.
+    }
+    debug {
+      // Debug uses the Android Gradle Plugin's default debug key.
     }
   }
   compileOptions {
@@ -116,6 +125,9 @@ dependencies {
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
+  // Real org.json implementation for JVM unit tests (the Android stub jar
+  // only throws); required by the Gemini live-protocol tests and client code.
+  testImplementation(libs.org.json)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
   androidTestImplementation(platform(libs.androidx.compose.bom))

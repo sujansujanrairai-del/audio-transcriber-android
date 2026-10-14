@@ -1,4 +1,4 @@
-name: Android Release APKs
+name: Android CI and Release APKs
 
 on:
   pull_request:
@@ -34,6 +34,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0'
+          accept-android-sdk-licenses: true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -74,7 +77,7 @@ jobs:
             details="${details//'%'/'%25'}"
             details="${details//$'\n'/'%0A'}"
             details="${details//$'\r'/'%0D'}"
-            echo "::error file=.github/workflows/android-release.yml,line=65,title=Gradle unit tests failed::$details"
+            echo "::error file=.github/workflows/android-ci.yml,line=65,title=Gradle unit tests failed::$details"
           fi
 
       - name: Assemble production release APKs
@@ -108,10 +111,10 @@ jobs:
             details="${details//'%'/'%25'}"
             details="${details//$'\n'/'%0A'}"
             details="${details//$'\r'/'%0D'}"
-            echo "::error file=.github/workflows/android-release.yml,line=95,title=Gradle release build failed::$details"
+            echo "::error file=.github/workflows/android-ci.yml,line=104,title=Gradle release build failed::$details"
           fi
 
-      - name: Verify ABI APKs and prepare unsigned artifacts
+      - name: Verify ABI APKs are present and unsigned
         shell: bash
         run: |
           set -euo pipefail
@@ -143,11 +146,11 @@ jobs:
             echo "::error::apksigner was not found in the Android SDK build-tools"
             exit 1
           fi
-          apksigner="${apksigners[-1]}"
+          apksigner="${apksigners[${#apksigners[@]}-1]}"
 
           mkdir -p "$artifact_dir"
           for abi in "${expected_abis[@]}"; do
-            matches=("$output_dir"/*"$abi"*.apk)
+            matches=("$output_dir"/*-"$abi"-release-unsigned.apk)
             if [[ ${#matches[@]} -ne 1 ]]; then
               echo "::error::Expected exactly one release APK for $abi, found ${#matches[@]}"
               printf 'Matches: %s\n' "${matches[@]:-none}"
@@ -155,6 +158,11 @@ jobs:
             fi
 
             source_apk="${matches[0]}"
+            if [[ "$source_apk" != *-unsigned.apk ]]; then
+              echo "::error::Expected an unsigned APK filename for $abi, got $source_apk"
+              exit 1
+            fi
+
             destination_dir="$artifact_dir/$abi"
             destination_apk="$destination_dir/audio-transcriber-$abi-unsigned.apk"
             mkdir -p "$destination_dir"
@@ -166,8 +174,26 @@ jobs:
             fi
 
             cp "$source_apk" "$destination_apk"
-            echo "Prepared unsigned $abi artifact: $destination_apk"
+            echo "Prepared unsigned $abi APK: $destination_apk"
           done
+
+      - name: Publish release APK summary
+        shell: bash
+        run: |
+          {
+            echo '### Audio Transcriber release APKs'
+            echo
+            echo 'Application ID: `com.blindtechnexus.audiotranscriber`'
+            echo
+            echo 'All APKs are unsigned; sign them with a distributor-owned key before installation or publishing.'
+            echo
+            echo '| ABI | SHA-256 |'
+            echo '| --- | --- |'
+            for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+              apk="release-artifacts/$abi/audio-transcriber-$abi-unsigned.apk"
+              printf '| `%s` | `%s` |\n' "$abi" "$(sha256sum "$apk" | cut -d' ' -f1)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload armeabi-v7a APK
         uses: actions/upload-artifact@v7
