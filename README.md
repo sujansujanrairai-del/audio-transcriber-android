@@ -61,7 +61,7 @@ The Android namespace and application ID are `com.blindtechnexus.audiotranscribe
 
 ## 📦 Building production APKs
 
-The production `release` build is intentionally unsigned and split into four ABI-specific APKs: `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+The production `release` build is intentionally unsigned and split into four ABI-specific APKs: `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`. A JDK 21 installation is required to run the unit tests with the SDK 36 Robolectric configuration.
 
 ```bash
 ./gradlew :app:testDebugUnitTest
