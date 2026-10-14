@@ -1,0 +1,195 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8"
+  ORG_GRADLE_PROJECT_org.gradle.caching: "true"
+  ORG_GRADLE_PROJECT_org.gradle.parallel: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          # JDK 21 (not 17): Robolectric's SDK 36 sandbox, used by the JVM
+          # tests for this app's target SDK, requires a Java 21 runtime.
+          # Gradle 9 / AGP 9 / Kotlin 2.2 all run on 21.
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # This app compiles against API 36.1 (compileSdk 36, minorApiLevel 1),
+          # so the 36.1 platform is required in addition to the base 36 platform.
+          packages: 'platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Download Gradle Wrapper jar (if missing)
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Downloading Gradle Wrapper jar..."
+            curl --fail --location --retry 3 --retry-delay 2 \
+              https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradle/wrapper/gradle-wrapper.jar \
+              -o gradle/wrapper/gradle-wrapper.jar
+            test -s gradle/wrapper/gradle-wrapper.jar
+            jar tf gradle/wrapper/gradle-wrapper.jar >/dev/null
+          else
+            echo "Gradle Wrapper jar already exists."
+          fi
+
+      - name: Run JVM unit tests
+        shell: bash
+        run: |
+          set +e
+          ./gradlew testDebugUnitTest --parallel --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Test failures are also republished as one workflow annotation: the
+            # check run alone is then enough to see what broke, without
+            # downloading anything.
+            {
+              grep -E '^e: ' /tmp/gradle-test.log || true
+              grep -E 'error:|FAILURE:|Execution failed|What went wrong|Caused by|> Task .* FAILED|FAILED$' /tmp/gradle-test.log || true
+              # Gradle's console only names the failing tests; the actual
+              # assertion / stack trace lives in the JUnit XML reports, so
+              # republish those too (check run stays self-explanatory).
+              grep -h -A 15 -E '<failure|<error' app/build/test-results/testDebugUnitTest/*.xml || true
+            } | head -n 120 > /tmp/test-problems.txt
+            cat /tmp/test-problems.txt
+            message=$(cat /tmp/test-problems.txt)
+            message=${message//'%'/'%25'}
+            message=${message//$'\r'/}
+            message=${message//$'\n'/'%0A'}
+            if [ -n "$message" ]; then
+              echo "::error title=Unit tests failed::${message}"
+            else
+              echo "::error title=Unit tests failed::No test errors found in the log; see the job log."
+            fi
+          fi
+          exit "$status"
+
+      - name: Build 32-bit, 64-bit, and universal unsigned release APKs
+        # ABI splits and the universal output share one Gradle invocation and
+        # dependency resolution. No signingConfig is configured anywhere, so
+        # every APK emitted here is unsigned (…-release-unsigned.apk).
+        shell: bash
+        run: |
+          set +e
+          ./gradlew assembleRelease --parallel --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Build logs live in a storage host that some networks cannot reach, so the compiler
+            # errors are also republished as one workflow annotation: the check run alone is then
+            # enough to see what broke, without downloading anything.
+            {
+              grep -E '^e: ' /tmp/gradle-build.log || true
+              grep -E 'error:|FAILURE:|Execution failed|What went wrong|Caused by|> Task .* FAILED' /tmp/gradle-build.log || true
+            } | head -n 80 > /tmp/build-problems.txt
+            message=$(cat /tmp/build-problems.txt)
+            message=${message//'%'/'%25'}
+            message=${message//$'\r'/}
+            message=${message//$'\n'/'%0A'}
+            if [ -n "$message" ]; then
+              echo "::error title=Gradle build failed::${message}"
+            else
+              echo "::error title=Gradle build failed::No compiler errors found in the log; see the job log."
+            fi
+          fi
+          exit "$status"
+
+      - name: Verify unsigned per-architecture APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Release APK outputs ==="
+          ls -lh app/build/outputs/apk/release
+          for abi in arm64-v8a armeabi-v7a universal; do
+            apk=$(find app/build/outputs/apk/release -maxdepth 1 -name "*${abi}*.apk" | head -n 1)
+            if [ -z "$apk" ]; then
+              echo "::error title=Missing APK::No ${abi} release APK was produced."
+              exit 1
+            fi
+            case "$apk" in
+              *-unsigned.apk) echo "OK (unsigned): $apk" ;;
+              *) echo "::error title=Unexpectedly signed APK::Expected an unsigned APK for ${abi}, got: $apk"; exit 1 ;;
+            esac
+          done
+
+      - name: Package one release archive per architecture
+        # Each ABI split and the universal APK get their OWN archive: a 64-bit
+        # zip, a 32-bit zip and a universal zip. Nothing is merged into one
+        # bundle any more.
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ci/package_release_archives.sh
+          ./ci/package_release_archives.sh app/build/outputs/apk/release release-artifacts
+          echo "=== Release archives ==="
+          ls -lh release-artifacts
+
+      - name: Publish release archive checksums to the job summary
+        shell: bash
+        run: |
+          {
+            echo "### Release archives"
+            echo ""
+            echo "Unsigned release APKs for \`com.blindtechnexus.audiotranscriber\` (Audio Transcriber). Sign with your own keystore before distribution."
+            echo ""
+            echo "| Archive | Architecture |"
+            echo "| --- | --- |"
+            echo "| \`Audio-Transcriber-x64-release.zip\` | 64-bit ARM (\`arm64-v8a\`) |"
+            echo "| \`Audio-Transcriber-32-bit-release.zip\` | 32-bit ARM (\`armeabi-v7a\`) |"
+            echo "| \`Audio-Transcriber-universal-release.zip\` | universal ARM (\`arm64-v8a\` + \`armeabi-v7a\`) |"
+            echo ""
+            echo '```'
+            cat release-artifacts/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload 64-bit ARM (arm64-v8a) release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Audio-Transcriber-x64-release
+          path: release-artifacts/Audio-Transcriber-x64-release.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload 32-bit ARM (armeabi-v7a) release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Audio-Transcriber-32-bit-release
+          path: release-artifacts/Audio-Transcriber-32-bit-release.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload universal release archive (all architectures)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Audio-Transcriber-universal-release
+          path: release-artifacts/Audio-Transcriber-universal-release.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
