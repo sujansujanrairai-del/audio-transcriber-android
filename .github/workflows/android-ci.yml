@@ -68,7 +68,12 @@ jobs:
             {
               grep -E '^e: ' /tmp/gradle-test.log || true
               grep -E 'error:|FAILURE:|Execution failed|What went wrong|Caused by|> Task .* FAILED|FAILED$' /tmp/gradle-test.log || true
-            } | head -n 80 > /tmp/test-problems.txt
+              # Gradle's console only names the failing tests; the actual
+              # assertion / stack trace lives in the JUnit XML reports, so
+              # republish those too (check run stays self-explanatory).
+              grep -h -A 15 -E '<failure|<error' app/build/test-results/testDebugUnitTest/*.xml || true
+            } | head -n 120 > /tmp/test-problems.txt
+            cat /tmp/test-problems.txt
             message=$(cat /tmp/test-problems.txt)
             message=${message//'%'/'%25'}
             message=${message//$'\r'/}

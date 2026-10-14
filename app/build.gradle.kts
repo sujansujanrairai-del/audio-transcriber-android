@@ -127,6 +127,9 @@ dependencies {
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
+  // Real org.json implementation for JVM unit tests (the Android stub jar
+  // only throws); required by the Gemini live-protocol tests and client code.
+  testImplementation(libs.org.json)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
   androidTestImplementation(platform(libs.androidx.compose.bom))
