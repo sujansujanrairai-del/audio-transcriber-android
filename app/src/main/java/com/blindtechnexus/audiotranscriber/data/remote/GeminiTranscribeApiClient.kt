@@ -1,7 +1,8 @@
 package com.blindtechnexus.audiotranscriber.data.remote
 
-import android.util.Base64
 import android.util.Log
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import com.blindtechnexus.audiotranscriber.domain.model.TranscriptSegment
 import com.blindtechnexus.audiotranscriber.domain.model.TranscriptionConfig
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,7 @@ data class FileTranscriptionResult(
     val summary: String? = null
 )
 
+@OptIn(ExperimentalEncodingApi::class)
 class GeminiTranscribeApiClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -88,7 +90,7 @@ class GeminiTranscribeApiClient(
         fileName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
         try {
-            val base64Audio = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+            val base64Audio = Base64.encode(audioBytes)
 
             // Construct prompt for gemini-3.5-transcribe
             val promptBuilder = StringBuilder()
@@ -186,7 +188,7 @@ class GeminiTranscribeApiClient(
         config: TranscriptionConfig,
         fileName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
-        val base64Audio = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+        val base64Audio = Base64.encode(audioBytes)
         val prompt = "Transcribe this audio file accurately. Include speaker diarization and timestamps in JSON format with title, detectedLanguage, fullText, keyTopics, and segments."
 
         val requestBodyJson = JSONObject().apply {

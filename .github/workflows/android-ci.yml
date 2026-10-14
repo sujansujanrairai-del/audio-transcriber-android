@@ -26,7 +26,10 @@ jobs:
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          # JDK 21 (not 17): Robolectric's SDK 36 sandbox, used by the JVM
+          # tests for this app's target SDK, requires a Java 21 runtime.
+          # Gradle 9 / AGP 9 / Kotlin 2.2 all run on 21.
+          java-version: '21'
           distribution: 'temurin'
           cache: 'gradle'
 
