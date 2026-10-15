@@ -19,8 +19,9 @@ object GeminiLiveProtocol {
         languageCode: String = "",
         customVocabulary: List<String> = emptyList()
     ): String {
+        val formattedModel = if (model.startsWith("models/")) model else "models/$model"
         val setupObj = JSONObject()
-        setupObj.put("model", model)
+        setupObj.put("model", formattedModel)
 
         val genConfig = JSONObject()
         val modalities = JSONArray().apply { put("TEXT") }
@@ -28,11 +29,10 @@ object GeminiLiveProtocol {
         setupObj.put("generationConfig", genConfig)
 
         val inputAudioTranscription = JSONObject()
-        val langCodes = JSONArray()
         if (languageCode.isNotBlank()) {
-            langCodes.put(languageCode)
+            val langCodes = JSONArray().apply { put(languageCode) }
+            inputAudioTranscription.put("languageCodes", langCodes)
         }
-        inputAudioTranscription.put("languageCodes", langCodes)
         setupObj.put("inputAudioTranscription", inputAudioTranscription)
 
         if (customVocabulary.isNotEmpty()) {
@@ -54,9 +54,6 @@ object GeminiLiveProtocol {
      */
     @OptIn(ExperimentalEncodingApi::class)
     fun createAudioChunkMessage(pcmData: ByteArray): String {
-        // Kotlin stdlib Base64 (no line wrapping): identical output to
-        // android.util.Base64.NO_WRAP, but also runnable in JVM unit tests
-        // and on every supported API level (java.util.Base64 needs API 26+).
         val base64Data = Base64.encode(pcmData)
 
         val mediaChunk = JSONObject().apply {
@@ -76,8 +73,9 @@ object GeminiLiveProtocol {
     }
 
     /**
-     * Extracts text from serverContent response.
-     * Checks inputAudioTranscription, inputTranscription, and modelTurn text.
+     * Extracts events from server responses.
+     * Handles setupComplete, interim_input_transcription, input_audio_transcription,
+     * and modelTurn streaming text.
      */
     fun parseServerContent(jsonString: String): LiveTranscriptionEvent? {
         return try {
@@ -89,37 +87,54 @@ object GeminiLiveProtocol {
                 return LiveTranscriptionEvent.ErrorEvent(message)
             }
 
+            // Check setupComplete / setup_complete
+            if (root.has("setupComplete") || root.has("setup_complete")) {
+                return LiveTranscriptionEvent.SetupComplete
+            }
+
             if (root.has("serverContent")) {
                 val serverContent = root.getJSONObject("serverContent")
 
-                // Check inputAudioTranscription, inputTranscription, or input_audio_transcription
-                val inputTrans = serverContent.optJSONObject("inputAudioTranscription")
-                    ?: serverContent.optJSONObject("inputTranscription")
-                    ?: serverContent.optJSONObject("input_audio_transcription")
+                // 1. Check interim_input_transcription / interimInputTranscription
+                val interimTrans = serverContent.optJSONObject("interim_input_transcription")
+                    ?: serverContent.optJSONObject("interimInputTranscription")
+                    ?: serverContent.optJSONObject("interimTranscription")
+                    ?: serverContent.optJSONObject("interim_transcription")
 
-                if (inputTrans != null) {
-                    var text = inputTrans.optString("text", "")
-                    if (text.isBlank()) {
-                        val parts = inputTrans.optJSONArray("parts")
-                        if (parts != null && parts.length() > 0) {
-                            val sb = StringBuilder()
-                            for (i in 0 until parts.length()) {
-                                sb.append(parts.getJSONObject(i).optString("text", ""))
-                            }
-                            text = sb.toString()
-                        }
-                    }
-
+                if (interimTrans != null) {
+                    val text = extractTextFromTranscriptionObj(interimTrans)
                     if (text.isNotBlank()) {
                         return LiveTranscriptionEvent.TranscriptionChunk(
                             text = text,
-                            isFinal = inputTrans.optBoolean("isFinal", false) || inputTrans.optBoolean("is_final", false),
-                            speaker = inputTrans.optString("speaker", "Speaker 1")
+                            isFinal = false,
+                            speaker = interimTrans.optString("speaker", "Speaker 1"),
+                            isInterim = true
                         )
                     }
                 }
 
-                // Check modelTurn text
+                // 2. Check input_audio_transcription / inputAudioTranscription / inputTranscription
+                val inputTrans = serverContent.optJSONObject("inputAudioTranscription")
+                    ?: serverContent.optJSONObject("inputTranscription")
+                    ?: serverContent.optJSONObject("input_audio_transcription")
+                    ?: serverContent.optJSONObject("input_transcription")
+
+                if (inputTrans != null) {
+                    val text = extractTextFromTranscriptionObj(inputTrans)
+                    if (text.isNotBlank()) {
+                        val isFinal = if (inputTrans.has("isFinal")) inputTrans.optBoolean("isFinal")
+                        else if (inputTrans.has("is_final")) inputTrans.optBoolean("is_final")
+                        else true
+                        return LiveTranscriptionEvent.TranscriptionChunk(
+                            text = text,
+                            isFinal = isFinal,
+                            speaker = inputTrans.optString("speaker", "Speaker 1"),
+                            isInterim = !isFinal
+                        )
+                    }
+                }
+
+                // 3. Check modelTurn text
                 if (serverContent.has("modelTurn")) {
                     val modelTurn = serverContent.getJSONObject("modelTurn")
                     val parts = modelTurn.optJSONArray("parts")
@@ -134,13 +149,14 @@ object GeminiLiveProtocol {
                             return LiveTranscriptionEvent.TranscriptionChunk(
                                 text = text,
                                 isFinal = false,
-                                speaker = "Speaker 1"
+                                speaker = "Speaker 1",
+                                isInterim = false
                             )
                         }
                     }
                 }
 
-                if (serverContent.optBoolean("turnComplete", false)) {
+                if (serverContent.optBoolean("turnComplete", false) || serverContent.optBoolean("turn_complete", false)) {
                     return LiveTranscriptionEvent.TurnComplete
                 }
 
@@ -154,15 +170,32 @@ object GeminiLiveProtocol {
             null
         }
     }
+
+    private fun extractTextFromTranscriptionObj(obj: JSONObject): String {
+        var text = obj.optString("text", "")
+        if (text.isBlank()) {
+            val parts = obj.optJSONArray("parts")
+            if (parts != null && parts.length() > 0) {
+                val sb = StringBuilder()
+                for (i in 0 until parts.length()) {
+                    sb.append(parts.getJSONObject(i).optString("text", ""))
+                }
+                text = sb.toString()
+            }
+        }
+        return text
+    }
 }
 
 sealed class LiveTranscriptionEvent {
     data class TranscriptionChunk(
         val text: String,
         val isFinal: Boolean = false,
-        val speaker: String = "Speaker 1"
+        val speaker: String = "Speaker 1",
+        val isInterim: Boolean = false
     ) : LiveTranscriptionEvent()
 
+    object SetupComplete : LiveTranscriptionEvent()
     object TurnComplete : LiveTranscriptionEvent()
     object Interrupted : LiveTranscriptionEvent()
     data class ErrorEvent(val message: String) : LiveTranscriptionEvent()

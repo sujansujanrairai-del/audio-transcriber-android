@@ -78,12 +78,13 @@ fun LiveTranscriptionTab(
                 OutlinedButton(
                     onClick = { showLanguageDropdown = true },
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(20.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.testTag("audio_language_button")
                 ) {
                     Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (preferences.languageCode.isBlank()) "Auto-detect" else preferences.languageCode,
+                        text = "Audio language (${getLanguageDisplayName(preferences.languageCode)})",
                         style = MaterialTheme.typography.labelMedium
                     )
                     Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -592,5 +593,22 @@ private fun StreamingChunkRow(
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = cursorAlpha))
             )
         }
+    }
+}
+
+fun getLanguageDisplayName(code: String): String {
+    return when (code) {
+        "" -> "Auto-detect"
+        "en-US" -> "English (US)"
+        "es-ES" -> "Spanish"
+        "ne-NP" -> "Nepali"
+        "hi-IN" -> "Hindi"
+        "fr-FR" -> "French"
+        "de-DE" -> "German"
+        "ja-JP" -> "Japanese"
+        "zh-CN" -> "Chinese"
+        "ar-SA" -> "Arabic"
+        "pt-BR" -> "Portuguese"
+        else -> code
     }
 }

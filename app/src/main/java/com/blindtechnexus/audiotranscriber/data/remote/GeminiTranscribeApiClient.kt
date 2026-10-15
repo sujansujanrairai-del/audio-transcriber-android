@@ -47,7 +47,7 @@ class GeminiTranscribeApiClient(
     companion object {
         const val BASE_URL = "https://generativelanguage.googleapis.com"
         const val MODEL_TRANSCRIBE = "gemini-3.5-transcribe"
-        const val MODEL_FLASH = "gemini-2.5-flash"
+        const val MODEL_FLASH = "gemini-3.5-flash"
         const val MODEL_TEXT = "gemini-3.5-flash"
     }
 
@@ -87,7 +87,10 @@ class GeminiTranscribeApiClient(
     }
 
     /**
-     * Transcribes pre-recorded audio file with Gemini 3.5 Transcribe
+     * Transcribes pre-recorded audio file with Gemini 3.5 Transcribe.
+     * Note: gemini-3.5-transcribe does NOT support JSON mode (responseMimeType="application/json").
+     * Clean audio + text instructions are sent, and responses are parsed cleanly.
+     * If gemini-3.5-transcribe is unavailable or returns an error, it seamlessly falls back to gemini-3.5-flash.
      */
     suspend fun transcribeAudioFile(
         apiKey: String,
@@ -103,36 +106,29 @@ class GeminiTranscribeApiClient(
         try {
             val base64Audio = Base64.encode(audioBytes)
 
-            // Construct prompt for gemini-3.5-transcribe
+            // Construct prompt for gemini-3.5-transcribe (STT format without JSON mode constraints)
             val promptBuilder = StringBuilder()
-            promptBuilder.append("You are Gemini 3.5 Transcribe. Accurately transcribe the provided audio.\n")
+            promptBuilder.append("Accurately transcribe the provided audio.\n")
+            if (config.languageCode.isNotBlank()) {
+                promptBuilder.append("- Spoken audio language: ${config.languageCode}\n")
+            }
             if (config.smartTranscription) {
-                promptBuilder.append("- Apply smart transcription: remove filler words (um, uh, ah), fix stuttering and self-corrections, and apply proper punctuation and capitalization.\n")
+                promptBuilder.append("- Smart transcription: remove filler words (um, uh, er, ah, like), fix stuttering and self-corrections, and format proper punctuation.\n")
+            } else {
+                promptBuilder.append("- Verbatim mode: transcribe word-for-word exactly as spoken.\n")
             }
             if (config.enableSpeakerDiarization) {
-                promptBuilder.append("- Perform speaker diarization for up to ${config.maxSpeakers} speakers. Label each section as Speaker 1, Speaker 2, etc.\n")
+                promptBuilder.append("- Distinguish up to ${config.maxSpeakers} speakers. Label each speaker turn clearly as Speaker 1, Speaker 2, etc.\n")
             }
             if (config.wordLevelTimestamps) {
-                promptBuilder.append("- Provide timestamps in [MM:SS] format for each speaker turn or sentence.\n")
+                promptBuilder.append("- Include timestamps in [MM:SS] format at the beginning of each speaker turn.\n")
             }
             if (config.customVocabulary.isNotEmpty()) {
-                promptBuilder.append("- Custom Vocabulary (ensure these terms are recognized accurately): ${config.customVocabulary.joinToString(", ")}\n")
+                promptBuilder.append("- Custom Vocabulary (ensure accurate spelling): ${config.customVocabulary.joinToString(", ")}\n")
             }
-            promptBuilder.append("\nReturn your output strictly as a JSON object with this exact schema:\n")
-            promptBuilder.append("{\n")
-            promptBuilder.append("  \"title\": \"Descriptive title of audio\",\n")
-            promptBuilder.append("  \"detectedLanguage\": \"Language name\",\n")
-            promptBuilder.append("  \"fullText\": \"Complete clean transcript text\",\n")
-            promptBuilder.append("  \"keyTopics\": [\"topic1\", \"topic2\"],\n")
-            promptBuilder.append("  \"segments\": [\n")
-            promptBuilder.append("    {\n")
-            promptBuilder.append("      \"speaker\": \"Speaker 1\",\n")
-            promptBuilder.append("      \"startTimeMs\": 0,\n")
-            promptBuilder.append("      \"endTimeMs\": 5000,\n")
-            promptBuilder.append("      \"text\": \"Spoken sentence here\"\n")
-            promptBuilder.append("    }\n")
-            promptBuilder.append("  ]\n")
-            promptBuilder.append("}")
+            promptBuilder.append("\nFormat output as speaker turns with timestamps:\n")
+            promptBuilder.append("[00:00] Speaker 1: <transcription>\n")
+            promptBuilder.append("[00:15] Speaker 2: <transcription>\n")
 
             val requestBodyJson = JSONObject().apply {
                 val contents = JSONArray()
@@ -159,11 +155,9 @@ class GeminiTranscribeApiClient(
                 contents.put(contentObj)
                 put("contents", contents)
 
-                val genConfig = JSONObject().apply {
-                    put("responseMimeType", "application/json")
-                    put("temperature", 0.2)
-                }
-                put("generationConfig", genConfig)
+                // CRITICAL: gemini-3.5-transcribe rejects responseMimeType="application/json" with
+                // 400: JSON mode is not enabled for this model.
+                // Do NOT pass responseMimeType in generationConfig!
             }
 
             val url = "$BASE_URL/v1beta/models/$MODEL_TRANSCRIBE:generateContent?key=${apiKey.trim()}"
@@ -181,20 +175,22 @@ class GeminiTranscribeApiClient(
                         return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key. Please check your key in Settings."))
                     }
 
-                    // Fallback attempt with gemini-2.5-flash if gemini-3.5-transcribe returns 404
-                    if (code == 404) {
-                        return@withContext transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
-                    }
-                    return@withContext Result.failure(Exception("Transcription failed ($code): ${parseErrorMessage(errorBody)}"))
+                    Log.w("GeminiTranscribeApi", "gemini-3.5-transcribe returned HTTP $code: $errorBody. Falling back to $MODEL_FLASH")
+                    // Fallback attempt with gemini-3.5-flash if gemini-3.5-transcribe returns 400, 404, or any error
+                    return@withContext transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
                 }
 
                 val responseBody = response.body?.string().orEmpty()
-                val parsed = parseTranscriptionResponse(responseBody, fileName)
+                val parsed = parseTranscriptionResponse(responseBody, fileName, config.languageCode)
                 Result.success(parsed)
             }
         } catch (e: Exception) {
-            Log.e("GeminiTranscribeApi", "Error in transcribeAudioFile", e)
-            Result.failure(e)
+            Log.e("GeminiTranscribeApi", "Error in transcribeAudioFile, trying fallback model", e)
+            try {
+                transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
+            } catch (fallbackEx: Exception) {
+                Result.failure(e)
+            }
         }
     }
 
@@ -206,7 +202,22 @@ class GeminiTranscribeApiClient(
         fileName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
         val base64Audio = Base64.encode(audioBytes)
-        val prompt = "Accurately transcribe this audio. Return ONLY a valid JSON object with: title, detectedLanguage, fullText, keyTopics (list of strings), and segments (list of objects with speaker, startTimeMs, endTimeMs, text)."
+        val promptBuilder = StringBuilder()
+        promptBuilder.append("Accurately transcribe this audio.\n")
+        if (config.languageCode.isNotBlank()) {
+            promptBuilder.append("- Audio language: ${config.languageCode}\n")
+        }
+        if (config.smartTranscription) {
+            promptBuilder.append("- Remove filler words (um, uh, ah), fix false starts, and apply clean punctuation.\n")
+        }
+        if (config.enableSpeakerDiarization) {
+            promptBuilder.append("- Identify speakers up to ${config.maxSpeakers} (Speaker 1, Speaker 2).\n")
+        }
+        if (config.customVocabulary.isNotEmpty()) {
+            promptBuilder.append("- Custom Vocabulary: ${config.customVocabulary.joinToString(", ")}\n")
+        }
+        promptBuilder.append("Return ONLY a valid JSON object matching this schema:\n")
+        promptBuilder.append("{\"title\":\"string\",\"detectedLanguage\":\"string\",\"fullText\":\"string\",\"keyTopics\":[\"topic1\",\"topic2\"],\"segments\":[{\"speaker\":\"Speaker 1\",\"startTimeMs\":0,\"endTimeMs\":5000,\"text\":\"sentence\"}]}")
 
         val requestBodyJson = JSONObject().apply {
             val contents = JSONArray()
@@ -219,11 +230,12 @@ class GeminiTranscribeApiClient(
                     put("data", base64Audio)
                 })
             })
-            parts.put(JSONObject().apply { put("text", prompt) })
+            parts.put(JSONObject().apply { put("text", promptBuilder.toString()) })
 
             contentObj.put("parts", parts)
             contents.put(contentObj)
             put("contents", contents)
+            // gemini-3.5-flash fully supports JSON mode
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
                 put("temperature", 0.2)
@@ -247,14 +259,18 @@ class GeminiTranscribeApiClient(
                     return@withContext Result.failure(Exception("Transcription failed ($code): ${parseErrorMessage(errorBody)}"))
                 }
                 val responseBody = response.body?.string().orEmpty()
-                Result.success(parseTranscriptionResponse(responseBody, fileName))
+                Result.success(parseTranscriptionResponse(responseBody, fileName, config.languageCode))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    private fun parseTranscriptionResponse(jsonResponse: String, fallbackTitle: String): FileTranscriptionResult {
+    private fun parseTranscriptionResponse(
+        jsonResponse: String,
+        fallbackTitle: String,
+        hintLanguage: String = ""
+    ): FileTranscriptionResult {
         return try {
             val root = JSONObject(jsonResponse)
             val candidates = root.optJSONArray("candidates")
@@ -266,7 +282,7 @@ class GeminiTranscribeApiClient(
             val content = candidate.getJSONObject("content")
             val rawText = content.getJSONArray("parts").getJSONObject(0).getString("text")
 
-            // Robust JSON extraction: clean markdown fences ```json ... ```
+            // Check if response contains JSON object
             var cleanText = rawText.trim()
             if (cleanText.startsWith("```json")) {
                 cleanText = cleanText.removePrefix("```json")
@@ -280,81 +296,157 @@ class GeminiTranscribeApiClient(
 
             val firstBrace = cleanText.indexOf('{')
             val lastBrace = cleanText.lastIndexOf('}')
+
             if (firstBrace >= 0 && lastBrace > firstBrace) {
-                cleanText = cleanText.substring(firstBrace, lastBrace + 1)
-            }
+                // Try JSON parsing
+                try {
+                    val jsonCandidate = cleanText.substring(firstBrace, lastBrace + 1)
+                    val data = JSONObject(jsonCandidate)
+                    val title = data.optString("title", fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"))
+                    val detectedLang = data.optString("detectedLanguage", if (hintLanguage.isNotBlank()) hintLanguage else "Auto-detected")
+                    val fullText = data.optString("fullText", "")
 
-            val data = JSONObject(cleanText)
-            val title = data.optString("title", fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"))
-            val detectedLang = data.optString("detectedLanguage", "Auto-detected")
-            val fullText = data.optString("fullText", "")
+                    val topics = mutableListOf<String>()
+                    val topicsArr = data.optJSONArray("keyTopics")
+                    if (topicsArr != null) {
+                        for (i in 0 until topicsArr.length()) {
+                            topics.add(topicsArr.getString(i))
+                        }
+                    }
 
-            val topics = mutableListOf<String>()
-            val topicsArr = data.optJSONArray("keyTopics")
-            if (topicsArr != null) {
-                for (i in 0 until topicsArr.length()) {
-                    topics.add(topicsArr.getString(i))
-                }
-            }
+                    val segments = mutableListOf<TranscriptSegment>()
+                    val segmentsArr = data.optJSONArray("segments")
+                    if (segmentsArr != null) {
+                        for (i in 0 until segmentsArr.length()) {
+                            val segObj = segmentsArr.getJSONObject(i)
+                            segments.add(
+                                TranscriptSegment(
+                                    id = UUID.randomUUID().toString(),
+                                    speaker = segObj.optString("speaker", "Speaker 1"),
+                                    startTimeMs = segObj.optLong("startTimeMs", 0L),
+                                    endTimeMs = segObj.optLong("endTimeMs", 0L),
+                                    text = segObj.optString("text", "")
+                                )
+                            )
+                        }
+                    }
 
-            val segments = mutableListOf<TranscriptSegment>()
-            val segmentsArr = data.optJSONArray("segments")
-            if (segmentsArr != null) {
-                for (i in 0 until segmentsArr.length()) {
-                    val segObj = segmentsArr.getJSONObject(i)
-                    segments.add(
-                        TranscriptSegment(
-                            id = UUID.randomUUID().toString(),
-                            speaker = segObj.optString("speaker", "Speaker 1"),
-                            startTimeMs = segObj.optLong("startTimeMs", 0L),
-                            endTimeMs = segObj.optLong("endTimeMs", 0L),
-                            text = segObj.optString("text", "")
+                    if (segments.isNotEmpty() || fullText.isNotBlank()) {
+                        return FileTranscriptionResult(
+                            title = title,
+                            fullText = fullText.ifBlank { segments.joinToString(" ") { it.text } },
+                            segments = segments.ifEmpty {
+                                listOf(TranscriptSegment(id = UUID.randomUUID().toString(), speaker = "Speaker 1", text = fullText))
+                            },
+                            detectedLanguage = detectedLang,
+                            keyTopics = topics
                         )
-                    )
+                    }
+                } catch (jsonEx: Exception) {
+                    Log.d("GeminiTranscribeApi", "Candidate JSON parse failed, falling back to line parser", jsonEx)
                 }
             }
 
-            if (segments.isEmpty() && fullText.isNotBlank()) {
-                segments.add(
-                    TranscriptSegment(
-                        id = UUID.randomUUID().toString(),
-                        speaker = "Speaker 1",
-                        text = fullText
-                    )
-                )
-            }
-
-            FileTranscriptionResult(
-                title = title,
-                fullText = fullText.ifBlank { segments.joinToString(" ") { it.text } },
-                segments = segments,
-                detectedLanguage = detectedLang,
-                keyTopics = topics
-            )
+            // Parse formatted transcript lines (e.g. "[00:05] Speaker 1: Hello world")
+            parseLineBasedTranscript(rawText, fallbackTitle, hintLanguage)
         } catch (e: Exception) {
             Log.e("GeminiTranscribeApi", "Error parsing response, falling back to raw text", e)
-            // If structured JSON fails, fallback to extracting text from raw response
             val fallbackText = try {
                 val root = JSONObject(jsonResponse)
                 root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
             } catch (_: Exception) {
                 jsonResponse.take(500)
             }
+            parseLineBasedTranscript(fallbackText, fallbackTitle, hintLanguage)
+        }
+    }
 
-            FileTranscriptionResult(
-                title = fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav"),
-                fullText = fallbackText,
-                segments = listOf(
+    private fun parseLineBasedTranscript(
+        rawText: String,
+        fallbackTitle: String,
+        hintLanguage: String
+    ): FileTranscriptionResult {
+        val lines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() }
+        val segments = mutableListOf<TranscriptSegment>()
+
+        // Regex to match timestamps like [01:23] or [00:01:23], speaker labels like Speaker 1:, Person 1:
+        val timestampRegex = Regex("""\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]""")
+        val speakerRegex = Regex("""(Speaker\s*\d+|Person\s*\d+|Host|Guest|[A-Za-z0-9_-]+):""", RegexOption.IGNORE_CASE)
+
+        var currentSpeaker = "Speaker 1"
+        var lastTimeMs = 0L
+
+        for (line in lines) {
+            val tsMatch = timestampRegex.find(line)
+            var timeMs = lastTimeMs
+            if (tsMatch != null) {
+                val p1 = tsMatch.groupValues[1].toLongOrNull() ?: 0L
+                val p2 = tsMatch.groupValues[2].toLongOrNull() ?: 0L
+                val p3 = tsMatch.groupValues.getOrNull(3)?.toLongOrNull()
+                timeMs = if (p3 != null) {
+                    // HH:MM:SS
+                    (p1 * 3600 + p2 * 60 + p3) * 1000L
+                } else {
+                    // MM:SS
+                    (p1 * 60 + p2) * 1000L
+                }
+                lastTimeMs = timeMs
+            }
+
+            val lineWithoutTs = line.replace(timestampRegex, "").trim()
+            val spMatch = speakerRegex.find(lineWithoutTs)
+            if (spMatch != null) {
+                currentSpeaker = spMatch.groupValues[1].trim()
+            }
+
+            val textContent = lineWithoutTs.replace(speakerRegex, "").trim()
+            if (textContent.isNotBlank()) {
+                segments.add(
                     TranscriptSegment(
                         id = UUID.randomUUID().toString(),
-                        speaker = "Speaker 1",
-                        text = fallbackText
+                        speaker = currentSpeaker,
+                        startTimeMs = timeMs,
+                        endTimeMs = timeMs + 3000L,
+                        text = textContent
                     )
-                ),
-                detectedLanguage = "Auto-detected",
-                keyTopics = emptyList()
-            )
+                )
+            }
         }
+
+        // Adjust endTimeMs of each segment to the startTimeMs of the next segment
+        for (i in 0 until segments.size - 1) {
+            val nextStart = segments[i + 1].startTimeMs
+            if (nextStart > segments[i].startTimeMs) {
+                segments[i] = segments[i].copy(endTimeMs = nextStart)
+            }
+        }
+
+        val fullText = if (segments.isNotEmpty()) {
+            segments.joinToString("\n") { "${it.speaker}: ${it.text}" }
+        } else {
+            rawText.trim()
+        }
+
+        // Extract key topics (frequent notable words / capitalized terms)
+        val words = fullText.split("\\s+".toRegex())
+            .map { it.trim('.', ',', '!', '?', ':', ';', '"', '\'').lowercase() }
+            .filter { it.length > 4 && it !in listOf("speaker", "about", "there", "their", "which", "would", "could", "should", "transcription") }
+        val topics = words.groupingBy { it }.eachCount().entries
+            .sortedByDescending { it.value }
+            .take(5)
+            .map { it.key.replaceFirstChar { char -> char.uppercase() } }
+
+        val cleanTitle = fallbackTitle.removeSuffix(".mp3").removeSuffix(".wav").removeSuffix(".m4a").removeSuffix(".ogg").replace('_', ' ')
+
+        return FileTranscriptionResult(
+            title = cleanTitle.ifBlank { "Audio Transcript" },
+            fullText = fullText,
+            segments = segments.ifEmpty {
+                listOf(TranscriptSegment(id = UUID.randomUUID().toString(), speaker = "Speaker 1", text = rawText))
+            },
+            detectedLanguage = if (hintLanguage.isNotBlank()) hintLanguage else "Auto-detected",
+            keyTopics = topics
+        )
     }
 
     /**

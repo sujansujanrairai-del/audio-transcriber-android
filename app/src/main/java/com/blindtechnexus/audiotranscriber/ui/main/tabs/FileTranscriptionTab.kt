@@ -45,6 +45,7 @@ fun FileTranscriptionTab(
     val fileState by viewModel.fileUiState.collectAsState()
     val preferences by viewModel.userPreferences.transcriptionConfig.collectAsState()
     val context = LocalContext.current
+    var showLanguageDropdown by remember { mutableStateOf(false) }
 
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -135,6 +136,62 @@ fun FileTranscriptionTab(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+
+        // Audio Language Selector Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box {
+                OutlinedButton(
+                    onClick = { showLanguageDropdown = true },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.testTag("file_audio_language_button")
+                ) {
+                    Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Audio language (${getLanguageDisplayName(preferences.languageCode)})",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+
+                DropdownMenu(
+                    expanded = showLanguageDropdown,
+                    onDismissRequest = { showLanguageDropdown = false }
+                ) {
+                    val languages = listOf(
+                        "" to "Auto-detect (All 85+ Languages)",
+                        "en-US" to "English (US)",
+                        "es-ES" to "Spanish (Español)",
+                        "ne-NP" to "Nepali (नेपाली)",
+                        "hi-IN" to "Hindi (हिन्दी)",
+                        "fr-FR" to "French (Français)",
+                        "de-DE" to "German (Deutsch)",
+                        "ja-JP" to "Japanese (日本語)",
+                        "zh-CN" to "Chinese (Mandarin)",
+                        "ar-SA" to "Arabic (العربية)",
+                        "pt-BR" to "Portuguese (Português)"
+                    )
+                    languages.forEach { (code, name) ->
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = {
+                                viewModel.userPreferences.updateTranscriptionConfig {
+                                    it.copy(languageCode = code)
+                                }
+                                showLanguageDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Diarization & Word-Timestamps Toggles
         Card(

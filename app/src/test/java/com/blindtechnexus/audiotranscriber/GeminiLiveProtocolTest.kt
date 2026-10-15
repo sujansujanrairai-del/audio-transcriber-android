@@ -59,4 +59,35 @@ class GeminiLiveProtocolTest {
         assertEquals("Hello world from Audio Transcriber", chunk.text)
         assertTrue(chunk.isFinal)
     }
+
+    @Test
+    fun testSetupCompleteParsing() {
+        val setupCompleteJson = """{"setupComplete":{}}"""
+        val event = GeminiLiveProtocol.parseServerContent(setupCompleteJson)
+        assertNotNull(event)
+        assertTrue(event is LiveTranscriptionEvent.SetupComplete)
+    }
+
+    @Test
+    fun testInterimTranscriptionParsing() {
+        val serverJson = """
+            {
+                "serverContent": {
+                    "interim_input_transcription": {
+                        "text": "Hello world in progress",
+                        "speaker": "Speaker 1"
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val event = GeminiLiveProtocol.parseServerContent(serverJson)
+        assertNotNull(event)
+        assertTrue(event is LiveTranscriptionEvent.TranscriptionChunk)
+
+        val chunk = event as LiveTranscriptionEvent.TranscriptionChunk
+        assertEquals("Hello world in progress", chunk.text)
+        assertFalse(chunk.isFinal)
+        assertTrue(chunk.isInterim)
+    }
 }

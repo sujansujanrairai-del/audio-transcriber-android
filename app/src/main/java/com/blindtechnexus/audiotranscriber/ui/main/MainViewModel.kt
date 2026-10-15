@@ -230,7 +230,10 @@ class MainViewModel(
             webSocketClient.events.collect { event ->
                 when (event) {
                     is LiveTranscriptionEvent.TranscriptionChunk -> {
-                        handleIncomingTranscriptionChunk(event.text, event.speaker, event.isFinal)
+                        handleIncomingTranscriptionChunk(event.text, event.speaker, event.isFinal, event.isInterim)
+                    }
+                    is LiveTranscriptionEvent.SetupComplete -> {
+                        // Setup acknowledged by server
                     }
                     is LiveTranscriptionEvent.TurnComplete -> {
                         commitCurrentStreamingText()
@@ -249,7 +252,12 @@ class MainViewModel(
         startSessionTimer()
     }
 
-    private fun handleIncomingTranscriptionChunk(text: String, speaker: String, isFinal: Boolean) {
+    private fun handleIncomingTranscriptionChunk(
+        text: String,
+        speaker: String,
+        isFinal: Boolean,
+        isInterim: Boolean = false
+    ) {
         val current = _liveUiState.value
         val config = preferencesManager.transcriptionConfig.value
 
@@ -261,26 +269,38 @@ class MainViewModel(
         }
 
         if (isFinal) {
-            val newSegment = TranscriptSegment(
-                id = UUID.randomUUID().toString(),
-                speaker = speaker.ifBlank { current.activeSpeaker },
-                text = (current.currentStreamingText + " " + cleanedText).trim(),
-                startTimeMs = (current.elapsedSeconds * 1000L).coerceAtLeast(0L),
-                endTimeMs = ((current.elapsedSeconds + 3) * 1000L),
-                isFillerWordCleaned = config.smartTranscription
-            )
+            val finalText = if (cleanedText.isNotBlank()) cleanedText else current.currentStreamingText
+            if (finalText.isNotBlank()) {
+                val newSegment = TranscriptSegment(
+                    id = UUID.randomUUID().toString(),
+                    speaker = speaker.ifBlank { current.activeSpeaker },
+                    text = finalText.trim(),
+                    startTimeMs = (current.elapsedSeconds * 1000L).coerceAtLeast(0L),
+                    endTimeMs = ((current.elapsedSeconds + 3) * 1000L),
+                    isFillerWordCleaned = config.smartTranscription
+                )
+                _liveUiState.update {
+                    it.copy(
+                        liveSegments = it.liveSegments + newSegment,
+                        currentStreamingText = "",
+                        activeSpeaker = speaker.ifBlank { current.activeSpeaker }
+                    )
+                }
+            }
+        } else if (isInterim) {
+            // Replace currentStreamingText with updated interim hypothesis
             _liveUiState.update {
                 it.copy(
-                    liveSegments = it.liveSegments + newSegment,
-                    currentStreamingText = "",
-                    activeSpeaker = speaker
+                    currentStreamingText = cleanedText.trim(),
+                    activeSpeaker = speaker.ifBlank { current.activeSpeaker }
                 )
             }
         } else {
+            // Delta chunk from modelTurn: append
             _liveUiState.update {
                 it.copy(
                     currentStreamingText = (it.currentStreamingText + " " + cleanedText).trim(),
-                    activeSpeaker = speaker
+                    activeSpeaker = speaker.ifBlank { current.activeSpeaker }
                 )
             }
         }
