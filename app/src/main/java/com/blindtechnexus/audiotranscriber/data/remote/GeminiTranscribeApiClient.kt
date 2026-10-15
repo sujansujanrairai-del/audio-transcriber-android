@@ -87,10 +87,79 @@ class GeminiTranscribeApiClient(
     }
 
     /**
-     * Transcribes pre-recorded audio file with Gemini 3.5 Transcribe.
-     * Note: gemini-3.5-transcribe does NOT support JSON mode (responseMimeType="application/json").
-     * Clean audio + text instructions are sent, and responses are parsed cleanly.
-     * If gemini-3.5-transcribe is unavailable or returns an error, it seamlessly falls back to gemini-3.5-flash.
+     * Fetches all available Gemini models using the user's API key
+     */
+    suspend fun fetchAvailableModels(apiKey: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(Exception("API key cannot be empty"))
+        }
+
+        val request = Request.Builder()
+            .url("$BASE_URL/v1beta/models?key=${apiKey.trim()}")
+            .get()
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errorBody = response.body?.string().orEmpty()
+                    return@withContext Result.failure(Exception("Failed to fetch models ($code): ${parseErrorMessage(errorBody)}"))
+                }
+
+                val body = response.body?.string().orEmpty()
+                val root = JSONObject(body)
+                val modelsArr = root.optJSONArray("models") ?: JSONArray()
+                val extractedModels = mutableListOf<String>()
+
+                for (i in 0 until modelsArr.length()) {
+                    val modelObj = modelsArr.getJSONObject(i)
+                    val rawName = modelObj.optString("name", "")
+                    val cleanName = rawName.removePrefix("models/")
+                    val methods = modelObj.optJSONArray("supportedGenerationMethods")
+                    val isGenerative = methods?.let { arr ->
+                        var found = false
+                        for (j in 0 until arr.length()) {
+                            if (arr.getString(j) == "generateContent") found = true
+                        }
+                        found
+                    } ?: true
+
+                    // Filter for transcription and generative models
+                    if (isGenerative && !cleanName.contains("embedding", ignoreCase = true) &&
+                        !cleanName.contains("aqa", ignoreCase = true)
+                    ) {
+                        extractedModels.add(cleanName)
+                    }
+                }
+
+                // Ensure default transcription models are included and prioritized
+                val prioritized = mutableListOf<String>()
+                // Always put gemini-3.5-transcribe first as default for file transcription
+                prioritized.add(MODEL_TRANSCRIBE)
+                listOf("gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview").forEach {
+                    if (it !in prioritized) prioritized.add(it)
+                }
+
+                extractedModels.forEach { model ->
+                    if (model !in prioritized && !model.contains("gemini-1.5") && !model.contains("gemini-2.0")) {
+                        prioritized.add(model)
+                    }
+                }
+
+                Result.success(prioritized)
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiTranscribeApi", "Error fetching models", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Transcribes pre-recorded audio file.
+     * If model is "gemini-3.5-transcribe", uses the specialized STT format without JSON constraints.
+     * If model is a multimodal model (e.g. "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash"),
+     * uses the multimodal generateContent endpoint with structured JSON mode and detailed prompting.
      */
     suspend fun transcribeAudioFile(
         apiKey: String,
@@ -103,10 +172,30 @@ class GeminiTranscribeApiClient(
             return@withContext Result.failure(Exception("Gemini API key is required. Please configure it in Settings."))
         }
 
+        val targetModel = config.selectedFileModel.ifBlank { MODEL_TRANSCRIBE }
+
+        // Route based on model architecture
+        if (targetModel == MODEL_TRANSCRIBE) {
+            transcribeWithDedicatedSTTModel(apiKey, audioBytes, mimeType, config, fileName)
+        } else {
+            transcribeWithMultimodalModel(apiKey, audioBytes, mimeType, config, fileName, targetModel)
+        }
+    }
+
+    /**
+     * Dedicated transcription handler for Gemini 3.5 Transcribe (specialized STT).
+     * Does NOT use JSON responseMimeType to prevent 400 rejection.
+     */
+    private suspend fun transcribeWithDedicatedSTTModel(
+        apiKey: String,
+        audioBytes: ByteArray,
+        mimeType: String,
+        config: TranscriptionConfig,
+        fileName: String
+    ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
         try {
             val base64Audio = Base64.encode(audioBytes)
 
-            // Construct prompt for gemini-3.5-transcribe (STT format without JSON mode constraints)
             val promptBuilder = StringBuilder()
             promptBuilder.append("Accurately transcribe the provided audio.\n")
             if (config.languageCode.isNotBlank()) {
@@ -135,7 +224,6 @@ class GeminiTranscribeApiClient(
                 val contentObj = JSONObject()
                 val parts = JSONArray()
 
-                // Audio part
                 val audioPart = JSONObject().apply {
                     val inlineData = JSONObject().apply {
                         put("mimeType", mimeType)
@@ -145,7 +233,6 @@ class GeminiTranscribeApiClient(
                 }
                 parts.put(audioPart)
 
-                // Instruction part
                 val textPart = JSONObject().apply {
                     put("text", promptBuilder.toString())
                 }
@@ -154,10 +241,6 @@ class GeminiTranscribeApiClient(
                 contentObj.put("parts", parts)
                 contents.put(contentObj)
                 put("contents", contents)
-
-                // CRITICAL: gemini-3.5-transcribe rejects responseMimeType="application/json" with
-                // 400: JSON mode is not enabled for this model.
-                // Do NOT pass responseMimeType in generationConfig!
             }
 
             val url = "$BASE_URL/v1beta/models/$MODEL_TRANSCRIBE:generateContent?key=${apiKey.trim()}"
@@ -175,9 +258,8 @@ class GeminiTranscribeApiClient(
                         return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key. Please check your key in Settings."))
                     }
 
-                    Log.w("GeminiTranscribeApi", "gemini-3.5-transcribe returned HTTP $code: $errorBody. Falling back to $MODEL_FLASH")
-                    // Fallback attempt with gemini-3.5-flash if gemini-3.5-transcribe returns 400, 404, or any error
-                    return@withContext transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
+                    Log.w("GeminiTranscribeApi", "gemini-3.5-transcribe returned HTTP $code: $errorBody. Falling back to multimodal model.")
+                    return@withContext transcribeWithMultimodalModel(apiKey, audioBytes, mimeType, config, fileName, MODEL_FLASH)
                 }
 
                 val responseBody = response.body?.string().orEmpty()
@@ -185,39 +267,59 @@ class GeminiTranscribeApiClient(
                 Result.success(parsed)
             }
         } catch (e: Exception) {
-            Log.e("GeminiTranscribeApi", "Error in transcribeAudioFile, trying fallback model", e)
-            try {
-                transcribeWithFallbackModel(apiKey, audioBytes, mimeType, config, fileName)
-            } catch (fallbackEx: Exception) {
-                Result.failure(e)
-            }
+            Log.e("GeminiTranscribeApi", "Error in transcribeWithDedicatedSTTModel, falling back", e)
+            transcribeWithMultimodalModel(apiKey, audioBytes, mimeType, config, fileName, MODEL_FLASH)
         }
     }
 
-    private suspend fun transcribeWithFallbackModel(
+    /**
+     * Multimodal transcription handler for general Gemini models (e.g. Gemini 3.6 Flash, 3.7 Flash, 3.5 Flash).
+     * Leverages structured JSON schema, custom vocabulary biasing, and explicit speaker diarization prompting.
+     */
+    suspend fun transcribeWithMultimodalModel(
         apiKey: String,
         audioBytes: ByteArray,
         mimeType: String,
         config: TranscriptionConfig,
-        fileName: String
+        fileName: String,
+        modelName: String
     ): Result<FileTranscriptionResult> = withContext(Dispatchers.IO) {
         val base64Audio = Base64.encode(audioBytes)
         val promptBuilder = StringBuilder()
-        promptBuilder.append("Accurately transcribe this audio.\n")
+        promptBuilder.append("You are an expert audio transcription system. Accurately transcribe every word spoken in the attached audio.\n\n")
+
         if (config.languageCode.isNotBlank()) {
-            promptBuilder.append("- Audio language: ${config.languageCode}\n")
+            promptBuilder.append("1. Audio Language: ${config.languageCode}\n")
+        } else {
+            promptBuilder.append("1. Audio Language: Automatically detect the spoken language across all supported languages.\n")
         }
+
         if (config.smartTranscription) {
-            promptBuilder.append("- Remove filler words (um, uh, ah), fix false starts, and apply clean punctuation.\n")
+            promptBuilder.append("2. Smart Transcription Mode: Remove filler words (um, uh, er, ah, like, you know), resolve stutters and false starts, and apply clean punctuation and capitalization.\n")
+        } else {
+            promptBuilder.append("2. Verbatim Mode: Transcribe every spoken utterance word-for-word exactly as pronounced, preserving all filler words.\n")
         }
+
         if (config.enableSpeakerDiarization) {
-            promptBuilder.append("- Identify speakers up to ${config.maxSpeakers} (Speaker 1, Speaker 2).\n")
+            promptBuilder.append("3. Speaker Diarization: Distinguish up to ${config.maxSpeakers} unique speakers accurately. Label each speaker turn as 'Speaker 1', 'Speaker 2', etc. Include accurate startTimeMs and endTimeMs timestamps for every turn.\n")
+        } else {
+            promptBuilder.append("3. Label the speaker as 'Speaker 1' throughout.\n")
         }
+
         if (config.customVocabulary.isNotEmpty()) {
-            promptBuilder.append("- Custom Vocabulary: ${config.customVocabulary.joinToString(", ")}\n")
+            promptBuilder.append("4. Custom Vocabulary (prioritize accurate recognition of these terms): ${config.customVocabulary.joinToString(", ")}\n")
         }
-        promptBuilder.append("Return ONLY a valid JSON object matching this schema:\n")
-        promptBuilder.append("{\"title\":\"string\",\"detectedLanguage\":\"string\",\"fullText\":\"string\",\"keyTopics\":[\"topic1\",\"topic2\"],\"segments\":[{\"speaker\":\"Speaker 1\",\"startTimeMs\":0,\"endTimeMs\":5000,\"text\":\"sentence\"}]}")
+
+        promptBuilder.append("\nReturn ONLY a valid JSON object matching this schema:\n")
+        promptBuilder.append("{\n")
+        promptBuilder.append("  \"title\": \"Descriptive title of audio content\",\n")
+        promptBuilder.append("  \"detectedLanguage\": \"Language name\",\n")
+        promptBuilder.append("  \"fullText\": \"Full transcript with all sentences\",\n")
+        promptBuilder.append("  \"keyTopics\": [\"topic1\", \"topic2\"],\n")
+        promptBuilder.append("  \"segments\": [\n")
+        promptBuilder.append("    {\"speaker\": \"Speaker 1\", \"startTimeMs\": 0, \"endTimeMs\": 5000, \"text\": \"transcribed sentence\"}\n")
+        promptBuilder.append("  ]\n")
+        promptBuilder.append("}")
 
         val requestBodyJson = JSONObject().apply {
             val contents = JSONArray()
@@ -235,14 +337,16 @@ class GeminiTranscribeApiClient(
             contentObj.put("parts", parts)
             contents.put(contentObj)
             put("contents", contents)
-            // gemini-3.5-flash fully supports JSON mode
+
+            // Multimodal Gemini models support structured JSON output
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
-                put("temperature", 0.2)
+                put("temperature", 0.1)
             })
         }
 
-        val url = "$BASE_URL/v1beta/models/$MODEL_FLASH:generateContent?key=${apiKey.trim()}"
+        val cleanModel = modelName.removePrefix("models/")
+        val url = "$BASE_URL/v1beta/models/$cleanModel:generateContent?key=${apiKey.trim()}"
         val request = Request.Builder()
             .url(url)
             .post(requestBodyJson.toString().toRequestBody("application/json".toMediaType()))
@@ -254,9 +358,9 @@ class GeminiTranscribeApiClient(
                     val code = response.code
                     val errorBody = response.body?.string().orEmpty()
                     if (code == 401) {
-                        return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key."))
+                        return@withContext Result.failure(Exception("Authentication error (401): Invalid or unauthorized Gemini API key. Please check your key in Settings."))
                     }
-                    return@withContext Result.failure(Exception("Transcription failed ($code): ${parseErrorMessage(errorBody)}"))
+                    return@withContext Result.failure(Exception("Transcription failed with $cleanModel ($code): ${parseErrorMessage(errorBody)}"))
                 }
                 val responseBody = response.body?.string().orEmpty()
                 Result.success(parseTranscriptionResponse(responseBody, fileName, config.languageCode))

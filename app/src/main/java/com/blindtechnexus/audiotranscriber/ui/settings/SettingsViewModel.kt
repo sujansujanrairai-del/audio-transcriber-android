@@ -37,12 +37,53 @@ class SettingsViewModel(
     private val _keyValidationStatus = MutableStateFlow<String?>(null)
     val keyValidationStatus: StateFlow<String?> = _keyValidationStatus.asStateFlow()
 
+    private val _isUpdatingModels = MutableStateFlow(false)
+    val isUpdatingModels: StateFlow<Boolean> = _isUpdatingModels.asStateFlow()
+
+    private val _updateModelsMessage = MutableStateFlow<String?>(null)
+    val updateModelsMessage: StateFlow<String?> = _updateModelsMessage.asStateFlow()
+
     fun updateTheme(transform: (ThemeSettings) -> ThemeSettings) {
         preferencesManager.updateThemeSettings(transform)
     }
 
     fun updateTranscriptionConfig(transform: (TranscriptionConfig) -> TranscriptionConfig) {
         preferencesManager.updateTranscriptionConfig(transform)
+    }
+
+    fun selectFileTranscriptionModel(model: String) {
+        preferencesManager.updateTranscriptionConfig { it.copy(selectedFileModel = model) }
+    }
+
+    fun updateModelsFromApi() {
+        val key = secureKeyStorage.getApiKey()
+        if (key.isBlank()) {
+            _updateModelsMessage.value = "Please save a valid Gemini API key first to fetch models."
+            return
+        }
+
+        viewModelScope.launch {
+            _isUpdatingModels.value = true
+            _updateModelsMessage.value = "Fetching available models from Gemini API..."
+            val result = apiClient.fetchAvailableModels(key)
+            result.fold(
+                onSuccess = { models ->
+                    preferencesManager.updateTranscriptionConfig {
+                        it.copy(availableModels = models)
+                    }
+                    _isUpdatingModels.value = false
+                    _updateModelsMessage.value = "Successfully fetched ${models.size} models from Gemini API!"
+                },
+                onFailure = { err ->
+                    _isUpdatingModels.value = false
+                    _updateModelsMessage.value = "Failed to update models: ${err.localizedMessage ?: "Unknown error"}"
+                }
+            )
+        }
+    }
+
+    fun clearUpdateModelsMessage() {
+        _updateModelsMessage.value = null
     }
 
     fun updateAudioSettings(transform: (AudioSettings) -> AudioSettings) {
@@ -74,6 +115,8 @@ class SettingsViewModel(
                     _maskedApiKey.value = secureKeyStorage.getMaskedApiKey()
                     _apiKeyUpdateInput.value = ""
                     _keyValidationStatus.value = "Key successfully updated and encrypted!"
+                    // Also auto refresh available models with the newly validated key
+                    updateModelsFromApi()
                     onComplete()
                 }
                 is ApiValidationResult.Error -> {

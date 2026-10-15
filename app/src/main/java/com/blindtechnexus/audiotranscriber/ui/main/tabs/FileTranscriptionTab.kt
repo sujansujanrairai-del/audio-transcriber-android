@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.blindtechnexus.audiotranscriber.R
 import com.blindtechnexus.audiotranscriber.domain.model.TranscriptSegment
 import com.blindtechnexus.audiotranscriber.ui.accessibility.accessibleTouchTarget
@@ -46,6 +47,8 @@ fun FileTranscriptionTab(
     val preferences by viewModel.userPreferences.transcriptionConfig.collectAsState()
     val context = LocalContext.current
     var showLanguageDropdown by remember { mutableStateOf(false) }
+    var showFullPreviewDialog by remember { mutableStateOf(false) }
+    var resultViewMode by remember { mutableStateOf("full") }
 
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -303,65 +306,101 @@ fun FileTranscriptionTab(
             }
         } else if (fileState.result != null) {
             val result = fileState.result!!
+            val modelLabel = if (preferences.selectedFileModel == "gemini-3.5-transcribe") "Gemini 3.5 Transcribe" else preferences.selectedFileModel
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                // Interactive Speaker Timeline Chart
-                SpeakerTimelineChart(
-                    segments = result.segments,
-                    onSelectSegment = { /* scroll or highlight */ }
-                )
+                // Top result header with Model Badge and Preview Full Transcription button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = modelLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    // Button: Preview Full Transcription
+                    FilledTonalButton(
+                        onClick = { showFullPreviewDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("btn_preview_full_transcript")
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Preview Full", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // View Mode Tabs: Full Transcript vs Speaker Segments
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = resultViewMode == "full",
+                        onClick = { resultViewMode = "full" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) {
+                        Icon(Icons.Default.Notes, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Full Transcript")
+                    }
+                    SegmentedButton(
+                        selected = resultViewMode == "segments",
+                        onClick = { resultViewMode = "segments" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) {
+                        Icon(Icons.Default.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Speaker Segments (${result.segments.size})")
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Keyword chips row
-                if (result.keyTopics.isNotEmpty()) {
-                    KeywordChipsRow(
-                        keywords = result.keyTopics,
-                        selectedKeyword = fileState.selectedKeyword,
-                        onSelectKeyword = { viewModel.selectKeyword(it) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                // AI Action Row: Summarize, Translate & Web Search Verify
+                // AI Action Row: Summarize & Translate (Redundant Search button removed)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilledTonalButton(
                         onClick = { viewModel.summarizeCurrentTranscript() },
                         enabled = !fileState.isSummarizing,
                         modifier = Modifier.weight(1f).accessibleTouchTarget(),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.Summarize, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (fileState.isSummarizing) "Summary..." else "Summary", style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Default.Summarize, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (fileState.isSummarizing) "Summarizing..." else "Summarize", style = MaterialTheme.typography.labelSmall)
                     }
 
                     FilledTonalButton(
                         onClick = { viewModel.translateCurrentTranscript(fileState.targetTranslationLanguage) },
                         enabled = !fileState.isTranslating,
                         modifier = Modifier.weight(1f).accessibleTouchTarget(),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.Translate, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (fileState.isTranslating) "Translate..." else "Translate", style = MaterialTheme.typography.labelSmall)
-                    }
-
-                    FilledTonalButton(
-                        onClick = { viewModel.performWebSearchGroundingForCurrentFile() },
-                        modifier = Modifier.weight(1f).accessibleTouchTarget(),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                    ) {
-                        Icon(Icons.Default.TravelExplore, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Web Search", style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Default.Translate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (fileState.isTranslating) "Translating..." else "Translate", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 
@@ -374,7 +413,16 @@ fun FileTranscriptionTab(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Gemini Summary", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Gemini Summary", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { viewModel.copyToClipboard(fileState.activeSummary.orEmpty()) }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy summary", modifier = Modifier.size(14.dp))
+                                }
+                            }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(fileState.activeSummary.orEmpty(), style = MaterialTheme.typography.bodySmall)
                         }
@@ -390,7 +438,16 @@ fun FileTranscriptionTab(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f))
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Translation (${fileState.targetTranslationLanguage})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Translation (${fileState.targetTranslationLanguage})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { viewModel.copyToClipboard(fileState.activeTranslation.orEmpty()) }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy translation", modifier = Modifier.size(14.dp))
+                                }
+                            }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(fileState.activeTranslation.orEmpty(), style = MaterialTheme.typography.bodySmall)
                         }
@@ -399,39 +456,123 @@ fun FileTranscriptionTab(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Segments List
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(result.segments) { segment ->
-                        FileSegmentCard(
-                            segment = segment,
-                            isHighlighted = fileState.selectedKeyword != null && segment.text.contains(fileState.selectedKeyword!!, ignoreCase = true),
-                            onCopy = { viewModel.copyToClipboard(segment.text) }
+                // Content View depending on resultViewMode ("full" vs "segments")
+                if (resultViewMode == "full") {
+                    // Full Transcription Direct Display
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .testTag("full_transcript_card"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize().padding(14.dp)) {
+                            // Header stats
+                            val wordCount = result.fullText.split("\\s+".toRegex()).count { it.isNotBlank() }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Full Continuous Transcription",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "$wordCount words • ${result.detectedLanguage}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                            // Scrollable full text
+                            Box(modifier = Modifier.weight(1f)) {
+                                val scrollState = rememberScrollState()
+                                Text(
+                                    text = result.fullText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    lineHeight = 22.sp,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(scrollState)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Speaker Segments View
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    ) {
+                        // Interactive Speaker Timeline Chart
+                        SpeakerTimelineChart(
+                            segments = result.segments,
+                            onSelectSegment = { /* scroll or highlight */ }
                         )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Keyword chips row
+                        if (result.keyTopics.isNotEmpty()) {
+                            KeywordChipsRow(
+                                keywords = result.keyTopics,
+                                selectedKeyword = fileState.selectedKeyword,
+                                onSelectKeyword = { viewModel.selectKeyword(it) }
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+
+                        // Segments List
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(result.segments) { segment ->
+                                FileSegmentCard(
+                                    segment = segment,
+                                    isHighlighted = fileState.selectedKeyword != null && segment.text.contains(fileState.selectedKeyword!!, ignoreCase = true),
+                                    onCopy = { viewModel.copyToClipboard(segment.text) }
+                                )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Export bar
+                // Bottom Export bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    OutlinedButton(onClick = { viewModel.copyToClipboard(result.fullText) }) {
+                    OutlinedButton(
+                        onClick = { viewModel.copyToClipboard(result.fullText) },
+                        modifier = Modifier.testTag("btn_copy_all_transcript")
+                    ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Copy All")
+                        Text("Copy Full Text")
                     }
 
-                    Button(onClick = { viewModel.shareTranscript(result.fullText, result.title) }) {
+                    Button(
+                        onClick = { viewModel.shareTranscript(result.fullText, result.title) },
+                        modifier = Modifier.testTag("btn_share_transcript")
+                    ) {
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Share")
+                        Text("Share Transcript")
                     }
                 }
             }
@@ -459,6 +600,84 @@ fun FileTranscriptionTab(
                 }
             }
         }
+    }
+
+    if (showFullPreviewDialog && fileState.result != null) {
+        val result = fileState.result!!
+        val modelLabel = if (preferences.selectedFileModel == "gemini-3.5-transcribe") "Gemini 3.5 Transcribe" else preferences.selectedFileModel
+        val wordCount = result.fullText.split("\\s+".toRegex()).count { it.isNotBlank() }
+        val charCount = result.fullText.length
+
+        AlertDialog(
+            onDismissRequest = { showFullPreviewDialog = false },
+            title = {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = result.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f).semantics { heading() }
+                        )
+                        IconButton(onClick = { showFullPreviewDialog = false }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Close preview")
+                        }
+                    }
+                    Text(
+                        text = "$modelLabel • $wordCount words • $charCount characters",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val previewScroll = rememberScrollState()
+                        Text(
+                            text = result.fullText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 24.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                                .verticalScroll(previewScroll)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.copyToClipboard(result.fullText)
+                }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Copy Full Text")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    viewModel.shareTranscript(result.fullText, result.title)
+                }) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Share")
+                }
+            }
+        )
     }
 }
 

@@ -79,12 +79,16 @@ fun SettingsContent(
     val maskedKey by viewModel.maskedApiKey.collectAsState()
     val keyUpdateInput by viewModel.apiKeyUpdateInput.collectAsState()
     val validationStatus by viewModel.keyValidationStatus.collectAsState()
+    val isUpdatingModels by viewModel.isUpdatingModels.collectAsState()
+    val updateModelsMessage by viewModel.updateModelsMessage.collectAsState()
 
     var showVocabSheet by remember { mutableStateOf(false) }
     var showKeyUpdateDialog by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var modelDropdownExpanded by remember { mutableStateOf(false) }
 
     // Section collapse states
+    var isModelsExpanded by remember { mutableStateOf(true) }
     var isTranscriptionExpanded by remember { mutableStateOf(true) }
     var isAudioExpanded by remember { mutableStateOf(false) }
     var isAppearanceExpanded by remember { mutableStateOf(false) }
@@ -99,6 +103,261 @@ fun SettingsContent(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Section 0: Gemini AI Models Configuration
+        CollapsibleSectionCard(
+            title = "Gemini AI Models",
+            icon = Icons.Default.AutoAwesome,
+            isExpanded = isModelsExpanded,
+            onToggle = { isModelsExpanded = !isModelsExpanded }
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                // Live Transcription Model indicator (Locked to Gemini 3.5 Transcribe-live)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Live Transcription Engine",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    text = "Always Active",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Gemini 3.5 Transcribe-live (models/gemini-3.5-transcribe-live)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Live streaming speech recognition always connects via Gemini Live WebSocket API for low-latency incremental transcription.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Files Transcription Model Selection
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Files Transcription Model",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Choose the Gemini AI model for transcribing pre-recorded audio files. By default, Gemini 3.5 Transcribe is used.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Update Models Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { viewModel.updateModelsFromApi() },
+                            enabled = !isUpdatingModels,
+                            modifier = Modifier.testTag("btn_update_models")
+                        ) {
+                            if (isUpdatingModels) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Updating Models...")
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Update Models")
+                            }
+                        }
+
+                        Text(
+                            text = "${transcriptionConfig.availableModels.size} models loaded",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    // Status banner from Update Models
+                    if (updateModelsMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (updateModelsMessage!!.startsWith("Failed")) MaterialTheme.colorScheme.errorContainer
+                            else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = updateModelsMessage!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { viewModel.clearUpdateModelsMessage() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Model Selection Menu below Update Models
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedCard(
+                            onClick = { modelDropdownExpanded = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("model_selector_dropdown"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Selected Model for Audio Files",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (transcriptionConfig.selectedFileModel == "gemini-3.5-transcribe")
+                                            "Gemini 3.5 Transcribe (Default)"
+                                        else
+                                            transcriptionConfig.selectedFileModel,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select model")
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = modelDropdownExpanded,
+                            onDismissRequest = { modelDropdownExpanded = false },
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            transcriptionConfig.availableModels.forEach { model ->
+                                val isSelected = model == transcriptionConfig.selectedFileModel
+                                val isDefault = model == "gemini-3.5-transcribe"
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = model,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (isDefault) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = MaterialTheme.colorScheme.primaryContainer
+                                                    ) {
+                                                        Text(
+                                                            text = "Default STT",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = if (isDefault) "Specialized Audio Speech-to-Text"
+                                                else "Multimodal LLM with structured JSON audio reasoning",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = if (isSelected) {
+                                        { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                    } else null,
+                                    onClick = {
+                                        viewModel.selectFileTranscriptionModel(model)
+                                        modelDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Architecture Explanation Card based on selected model
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            if (transcriptionConfig.selectedFileModel == "gemini-3.5-transcribe") {
+                                Text(
+                                    text = "Dedicated STT API Architecture",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Gemini 3.5 Transcribe uses Google's specialized audio model with 2.6% WER, automatic language detection across 85+ locales, and low-latency transcript processing without JSON parsing overhead.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    text = "Multimodal Audio Reasoning Architecture",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                Text(
+                                    text = "${transcriptionConfig.selectedFileModel} uses multimodal understanding with structured JSON schemas, prompt-engineered speaker identification up to ${transcriptionConfig.maxSpeakers} speakers, and contextual topic extraction.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Section 1: Transcription Configuration
         CollapsibleSectionCard(
             title = stringResource(R.string.settings_section_transcription),

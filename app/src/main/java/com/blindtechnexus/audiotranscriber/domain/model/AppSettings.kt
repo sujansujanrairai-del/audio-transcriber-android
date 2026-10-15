@@ -7,7 +7,15 @@ data class TranscriptionConfig(
     val maxSpeakers: Int = 8,
     val wordLevelTimestamps: Boolean = true,
     val highlightFillerWords: Boolean = false,
-    val customVocabulary: List<String> = emptyList()
+    val customVocabulary: List<String> = emptyList(),
+    val selectedFileModel: String = "gemini-3.5-transcribe",
+    val availableModels: List<String> = listOf(
+        "gemini-3.5-transcribe",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview"
+    )
 )
 
 data class AudioSettings(

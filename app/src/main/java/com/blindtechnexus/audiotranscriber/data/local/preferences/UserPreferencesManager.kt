@@ -73,6 +73,28 @@ class UserPreferencesManager(context: Context) {
             }
         } catch (_: Exception) {}
 
+        val modelsJson = prefs.getString("available_models_json", "[]") ?: "[]"
+        val modelsList = mutableListOf<String>()
+        try {
+            val arr = JSONArray(modelsJson)
+            for (i in 0 until arr.length()) {
+                modelsList.add(arr.getString(i))
+            }
+        } catch (_: Exception) {}
+
+        val defaultModels = listOf(
+            "gemini-3.5-transcribe",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview"
+        )
+        val finalModels = if (modelsList.isNotEmpty()) {
+            if ("gemini-3.5-transcribe" !in modelsList) listOf("gemini-3.5-transcribe") + modelsList else modelsList
+        } else {
+            defaultModels
+        }
+
         return TranscriptionConfig(
             languageCode = prefs.getString("language_code", "") ?: "",
             smartTranscription = prefs.getBoolean("smart_transcription", true),
@@ -80,7 +102,9 @@ class UserPreferencesManager(context: Context) {
             maxSpeakers = prefs.getInt("max_speakers", 8),
             wordLevelTimestamps = prefs.getBoolean("word_level_timestamps", true),
             highlightFillerWords = prefs.getBoolean("highlight_filler_words", false),
-            customVocabulary = vocabList
+            customVocabulary = vocabList,
+            selectedFileModel = prefs.getString("selected_file_model", "gemini-3.5-transcribe") ?: "gemini-3.5-transcribe",
+            availableModels = finalModels
         )
     }
 
@@ -90,6 +114,9 @@ class UserPreferencesManager(context: Context) {
         val vocabArr = JSONArray()
         updated.customVocabulary.forEach { vocabArr.put(it) }
 
+        val modelsArr = JSONArray()
+        updated.availableModels.forEach { modelsArr.put(it) }
+
         prefs.edit()
             .putString("language_code", updated.languageCode)
             .putBoolean("smart_transcription", updated.smartTranscription)
@@ -98,6 +125,8 @@ class UserPreferencesManager(context: Context) {
             .putBoolean("word_level_timestamps", updated.wordLevelTimestamps)
             .putBoolean("highlight_filler_words", updated.highlightFillerWords)
             .putString("custom_vocab_json", vocabArr.toString())
+            .putString("selected_file_model", updated.selectedFileModel)
+            .putString("available_models_json", modelsArr.toString())
             .apply()
     }
 

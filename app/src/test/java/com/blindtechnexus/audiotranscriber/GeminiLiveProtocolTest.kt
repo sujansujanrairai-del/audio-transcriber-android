@@ -90,4 +90,36 @@ class GeminiLiveProtocolTest {
         assertFalse(chunk.isFinal)
         assertTrue(chunk.isInterim)
     }
+
+    @Test
+    fun testSetupMessageVerbatimMode() {
+        val message = GeminiLiveProtocol.createSetupMessage(
+            model = "gemini-3.5-transcribe-live",
+            smartTranscription = false
+        )
+        val json = JSONObject(message)
+        val setup = json.getJSONObject("setup")
+        val inputTrans = setup.getJSONObject("inputAudioTranscription")
+        assertEquals("VERBATIM", inputTrans.getString("mode"))
+    }
+
+    @Test
+    fun testRootLevelTranscriptionParsing() {
+        val rootJson = """
+            {
+                "input_transcription": {
+                    "text": "Root level finalized text",
+                    "speaker": "Speaker 2",
+                    "isFinal": true
+                }
+            }
+        """.trimIndent()
+        val event = GeminiLiveProtocol.parseServerContent(rootJson)
+        assertNotNull(event)
+        assertTrue(event is LiveTranscriptionEvent.TranscriptionChunk)
+        val chunk = event as LiveTranscriptionEvent.TranscriptionChunk
+        assertEquals("Root level finalized text", chunk.text)
+        assertEquals("Speaker 2", chunk.speaker)
+        assertTrue(chunk.isFinal)
+    }
 }

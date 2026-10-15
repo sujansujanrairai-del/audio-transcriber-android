@@ -216,11 +216,12 @@ class MainViewModel(
             "Listening with Gemini 3.5 Transcribe Live..."
         )
 
-        // Connect WebSocket
+        // Connect WebSocket with Gemini 3.5 Transcribe Live
         webSocketClient.connect(
             apiKey = apiKey,
             languageCode = config.languageCode,
             customVocabulary = config.customVocabulary,
+            smartTranscription = config.smartTranscription,
             scope = viewModelScope
         )
 
@@ -261,46 +262,43 @@ class MainViewModel(
         val current = _liveUiState.value
         val config = preferencesManager.transcriptionConfig.value
 
-        // Smart text formatting
-        val cleanedText = if (config.smartTranscription) {
-            cleanFillerWords(text)
-        } else {
-            text
-        }
+        val trimmedText = text.trim()
+        if (trimmedText.isBlank()) return
+
+        val activeSpk = speaker.ifBlank { current.activeSpeaker }
 
         if (isFinal) {
-            val finalText = if (cleanedText.isNotBlank()) cleanedText else current.currentStreamingText
-            if (finalText.isNotBlank()) {
-                val newSegment = TranscriptSegment(
-                    id = UUID.randomUUID().toString(),
-                    speaker = speaker.ifBlank { current.activeSpeaker },
-                    text = finalText.trim(),
-                    startTimeMs = (current.elapsedSeconds * 1000L).coerceAtLeast(0L),
-                    endTimeMs = ((current.elapsedSeconds + 3) * 1000L),
-                    isFillerWordCleaned = config.smartTranscription
-                )
-                _liveUiState.update {
-                    it.copy(
-                        liveSegments = it.liveSegments + newSegment,
-                        currentStreamingText = "",
-                        activeSpeaker = speaker.ifBlank { current.activeSpeaker }
-                    )
-                }
-            }
-        } else if (isInterim) {
-            // Replace currentStreamingText with updated interim hypothesis
+            val newSegment = TranscriptSegment(
+                id = UUID.randomUUID().toString(),
+                speaker = activeSpk,
+                text = trimmedText,
+                startTimeMs = (current.elapsedSeconds * 1000L).coerceAtLeast(0L),
+                endTimeMs = ((current.elapsedSeconds + 2) * 1000L),
+                isFillerWordCleaned = config.smartTranscription
+            )
             _liveUiState.update {
                 it.copy(
-                    currentStreamingText = cleanedText.trim(),
-                    activeSpeaker = speaker.ifBlank { current.activeSpeaker }
+                    liveSegments = it.liveSegments + newSegment,
+                    currentStreamingText = "",
+                    activeSpeaker = activeSpk
+                )
+            }
+        } else if (isInterim) {
+            // Replace currentStreamingText with live hypothesis as speech occurs
+            _liveUiState.update {
+                it.copy(
+                    currentStreamingText = trimmedText,
+                    activeSpeaker = activeSpk
                 )
             }
         } else {
-            // Delta chunk from modelTurn: append
+            // Incremental delta chunk from modelTurn streaming
             _liveUiState.update {
+                val newStreaming = if (it.currentStreamingText.isBlank()) trimmedText
+                else "${it.currentStreamingText} $trimmedText"
                 it.copy(
-                    currentStreamingText = (it.currentStreamingText + " " + cleanedText).trim(),
-                    activeSpeaker = speaker.ifBlank { current.activeSpeaker }
+                    currentStreamingText = newStreaming,
+                    activeSpeaker = activeSpk
                 )
             }
         }

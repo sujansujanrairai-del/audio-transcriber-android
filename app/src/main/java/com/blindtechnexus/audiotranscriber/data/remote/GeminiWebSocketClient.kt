@@ -43,15 +43,24 @@ class GeminiWebSocketClient(
     private var currentApiKey: String = ""
     private var currentLanguageCode: String = ""
     private var currentCustomVocab: List<String> = emptyList()
+    private var currentSmartTranscription: Boolean = true
 
     private var reconnectAttempt = 0
     private val maxReconnectAttempts = 5
     private var shouldReconnect = false
 
+    private val pendingChunks = ArrayDeque<ByteArray>()
+    private val maxPendingChunks = 30
+    private var setupTimeoutJob: Job? = null
+
+    private var currentModel: String = GeminiLiveProtocol.DEFAULT_MODEL
+    private var isSetupComplete: Boolean = false
+
     fun connect(
         apiKey: String,
         languageCode: String = "",
         customVocabulary: List<String> = emptyList(),
+        smartTranscription: Boolean = true,
         scope: CoroutineScope
     ) {
         if (apiKey.isBlank()) {
@@ -59,22 +68,25 @@ class GeminiWebSocketClient(
             return
         }
 
-        currentApiKey = apiKey
+        currentApiKey = apiKey.trim()
         currentLanguageCode = languageCode
         currentCustomVocab = customVocabulary
+        currentSmartTranscription = smartTranscription
         clientScope = scope
         shouldReconnect = true
         reconnectAttempt = 0
+        currentModel = GeminiLiveProtocol.DEFAULT_MODEL
+        synchronized(pendingChunks) {
+            pendingChunks.clear()
+        }
 
         initiateConnection()
     }
 
-    private var currentModel: String = GeminiLiveProtocol.DEFAULT_MODEL
-    private var isSetupComplete: Boolean = false
-
     private fun initiateConnection() {
         isSetupComplete = false
-        val url = "${GeminiLiveProtocol.WS_URL_BASE}?key=$currentApiKey"
+        setupTimeoutJob?.cancel()
+        val url = "${GeminiLiveProtocol.WS_URL_BASE}?key=${currentApiKey.trim()}"
         val request = Request.Builder().url(url).build()
 
         _connectionState.value = if (reconnectAttempt == 0) {
@@ -93,19 +105,30 @@ class GeminiWebSocketClient(
                 val setupJson = GeminiLiveProtocol.createSetupMessage(
                     model = currentModel,
                     languageCode = currentLanguageCode,
-                    customVocabulary = currentCustomVocab
+                    customVocabulary = currentCustomVocab,
+                    smartTranscription = currentSmartTranscription
                 )
                 webSocket.send(setupJson)
+
+                // Safety timeout: If server does not explicitly send setupComplete within 1.5s,
+                // activate streaming so audio chunks are not stalled
+                setupTimeoutJob = clientScope?.launch {
+                    delay(1500)
+                    if (!isSetupComplete && webSocket == this@GeminiWebSocketClient.webSocket) {
+                        Log.d("GeminiWebSocketClient", "Setup acknowledged via timeout fallback; marking connected.")
+                        onSetupCompleted()
+                    }
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.d("GeminiWebSocketClient", "Received WS message: ${text.take(200)}")
                 val event = GeminiLiveProtocol.parseServerContent(text)
                 if (event != null) {
                     when (event) {
                         is LiveTranscriptionEvent.SetupComplete -> {
                             Log.d("GeminiWebSocketClient", "Received setupComplete from Gemini Live API")
-                            isSetupComplete = true
-                            _connectionState.value = LiveConnectionState.Connected
+                            onSetupCompleted()
                         }
                         is LiveTranscriptionEvent.ErrorEvent -> {
                             Log.e("GeminiWebSocketClient", "Server error event: ${event.message}")
@@ -127,10 +150,9 @@ class GeminiWebSocketClient(
                             _connectionState.value = LiveConnectionState.Error(event.message)
                         }
                         else -> {
-                            // Any content message also implies setup is complete
+                            // Any valid content message also confirms setup is active
                             if (!isSetupComplete) {
-                                isSetupComplete = true
-                                _connectionState.value = LiveConnectionState.Connected
+                                onSetupCompleted()
                             }
                         }
                     }
@@ -138,11 +160,17 @@ class GeminiWebSocketClient(
                     clientScope?.launch {
                         _events.emit(event)
                     }
+                } else {
+                    // Check if message itself was a bare confirmation
+                    if (!isSetupComplete) {
+                        onSetupCompleted()
+                    }
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 isSetupComplete = false
+                setupTimeoutJob?.cancel()
                 val statusCode = response?.code ?: 0
                 val errorBody = try { response?.body?.string().orEmpty() } catch (_: Exception) { "" }
                 Log.e("GeminiWebSocketClient", "WebSocket Failure: code=$statusCode, msg=${t.message}, body=$errorBody", t)
@@ -178,6 +206,7 @@ class GeminiWebSocketClient(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d("GeminiWebSocketClient", "WebSocket Closed: $reason ($code)")
                 isSetupComplete = false
+                setupTimeoutJob?.cancel()
                 if (code != 1000) {
                     handleDisconnection(reason)
                 } else {
@@ -187,8 +216,29 @@ class GeminiWebSocketClient(
         })
     }
 
+    private fun onSetupCompleted() {
+        if (!isSetupComplete) {
+            isSetupComplete = true
+            setupTimeoutJob?.cancel()
+            _connectionState.value = LiveConnectionState.Connected
+            flushPendingChunks()
+        }
+    }
+
+    private fun flushPendingChunks() {
+        val ws = webSocket ?: return
+        synchronized(pendingChunks) {
+            while (pendingChunks.isNotEmpty()) {
+                val chunk = pendingChunks.removeFirst()
+                val chunkMessage = GeminiLiveProtocol.createAudioChunkMessage(chunk)
+                ws.send(chunkMessage)
+            }
+        }
+    }
+
     private fun handleDisconnection(reason: String) {
         isSetupComplete = false
+        setupTimeoutJob?.cancel()
         if (shouldReconnect && reconnectAttempt < maxReconnectAttempts) {
             reconnectAttempt++
             val backoffMillis = min(1000L * (2.0.pow(reconnectAttempt.toDouble())).toLong(), 16000L)
@@ -213,14 +263,26 @@ class GeminiWebSocketClient(
         if (ws != null && isSetupComplete && _connectionState.value == LiveConnectionState.Connected) {
             val chunkMessage = GeminiLiveProtocol.createAudioChunkMessage(pcmData)
             return ws.send(chunkMessage)
+        } else {
+            // Queue pending audio chunks so initial speech is not lost
+            synchronized(pendingChunks) {
+                if (pendingChunks.size >= maxPendingChunks) {
+                    pendingChunks.removeFirst()
+                }
+                pendingChunks.addLast(pcmData)
+            }
+            return false
         }
-        return false
     }
 
     fun disconnect() {
         shouldReconnect = false
         reconnectAttempt = 0
         isSetupComplete = false
+        setupTimeoutJob?.cancel()
+        synchronized(pendingChunks) {
+            pendingChunks.clear()
+        }
         try {
             webSocket?.close(1000, "User stopped session")
         } catch (e: Exception) {

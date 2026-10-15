@@ -149,6 +149,31 @@ fun LiveTranscriptionTab(
             }
         }
 
+        // Connecting or Reconnecting Banner
+        AnimatedVisibility(visible = liveState.isRecording && (liveState.connectionState is LiveConnectionState.Connecting || liveState.connectionState is LiveConnectionState.Reconnecting)) {
+            val reconnectAttempt = (liveState.connectionState as? LiveConnectionState.Reconnecting)?.attempt ?: 0
+            val reconnectText = if (reconnectAttempt > 0) "Reconnecting to Gemini Live API (attempt $reconnectAttempt/5)..." else "Connecting to Gemini 3.5 Transcribe Live..."
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = reconnectText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+
         // Connection Error Alert Banner
         AnimatedVisibility(visible = liveState.connectionState is LiveConnectionState.Error) {
             val errorMsg = (liveState.connectionState as? LiveConnectionState.Error)?.message ?: "Connection error"

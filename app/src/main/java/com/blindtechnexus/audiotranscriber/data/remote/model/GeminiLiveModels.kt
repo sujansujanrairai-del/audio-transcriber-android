@@ -17,7 +17,8 @@ object GeminiLiveProtocol {
     fun createSetupMessage(
         model: String = DEFAULT_MODEL,
         languageCode: String = "",
-        customVocabulary: List<String> = emptyList()
+        customVocabulary: List<String> = emptyList(),
+        smartTranscription: Boolean = true
     ): String {
         val formattedModel = if (model.startsWith("models/")) model else "models/$model"
         val setupObj = JSONObject()
@@ -28,18 +29,26 @@ object GeminiLiveProtocol {
         genConfig.put("responseModalities", modalities)
         setupObj.put("generationConfig", genConfig)
 
+        // Gemini Live Audio Transcription Configuration
         val inputAudioTranscription = JSONObject()
+        inputAudioTranscription.put("mode", if (smartTranscription) "SMART" else "VERBATIM")
         if (languageCode.isNotBlank()) {
             val langCodes = JSONArray().apply { put(languageCode) }
             inputAudioTranscription.put("languageCodes", langCodes)
         }
+        if (customVocabulary.isNotEmpty()) {
+            val vocabArray = JSONArray()
+            customVocabulary.take(100).forEach { vocabArray.put(it) }
+            inputAudioTranscription.put("customVocabulary", vocabArray)
+        }
         setupObj.put("inputAudioTranscription", inputAudioTranscription)
 
-        if (customVocabulary.isNotEmpty()) {
+        // Only for fallback conversational models (e.g. gemini-2.5-flash-native-audio), provide transcriber systemInstruction
+        if (model.contains("gemini-2.5-flash-native-audio") || model.contains("flash")) {
             val systemInstruction = JSONObject()
             val parts = JSONArray()
-            val vocabStr = customVocabulary.take(1000).joinToString(", ")
-            parts.put(JSONObject().put("text", "Custom vocabulary terms to recognize accurately: $vocabStr"))
+            val vocabText = if (customVocabulary.isNotEmpty()) " Custom terms: ${customVocabulary.take(50).joinToString(", ")}." else ""
+            parts.put(JSONObject().put("text", "You are a real-time speech transcriber. Accurately transcribe all audio directly into text without conversational commentary.$vocabText"))
             systemInstruction.put("parts", parts)
             setupObj.put("systemInstruction", systemInstruction)
         }
@@ -75,7 +84,7 @@ object GeminiLiveProtocol {
     /**
      * Extracts events from server responses.
      * Handles setupComplete, interim_input_transcription, input_audio_transcription,
-     * and modelTurn streaming text.
+     * input_transcription, and modelTurn streaming text.
      */
     fun parseServerContent(jsonString: String): LiveTranscriptionEvent? {
         return try {
@@ -83,86 +92,95 @@ object GeminiLiveProtocol {
 
             if (root.has("error")) {
                 val errObj = root.optJSONObject("error")
-                val message = errObj?.optString("message") ?: "Server returned error"
-                return LiveTranscriptionEvent.ErrorEvent(message)
+                val message = errObj?.optString("message") ?: root.optString("error")
+                return LiveTranscriptionEvent.ErrorEvent(message.ifBlank { "Server error" })
             }
 
-            // Check setupComplete / setup_complete
+            // Check setupComplete / setup_complete at root
             if (root.has("setupComplete") || root.has("setup_complete")) {
                 return LiveTranscriptionEvent.SetupComplete
             }
 
-            if (root.has("serverContent")) {
-                val serverContent = root.getJSONObject("serverContent")
+            // Check container: either in "serverContent" or top-level "root"
+            val serverContent = root.optJSONObject("serverContent") ?: root
 
-                // 1. Check interim_input_transcription / interimInputTranscription
-                val interimTrans = serverContent.optJSONObject("interim_input_transcription")
-                    ?: serverContent.optJSONObject("interimInputTranscription")
-                    ?: serverContent.optJSONObject("interimTranscription")
-                    ?: serverContent.optJSONObject("interim_transcription")
+            // 1. Check interim transcription (speculative hypothesis while speaking)
+            val interimObj = serverContent.opt("interim_input_transcription")
+                ?: serverContent.opt("interimInputTranscription")
+                ?: serverContent.opt("interimTranscription")
+                ?: serverContent.opt("interim_transcription")
 
-                if (interimTrans != null) {
-                    val text = extractTextFromTranscriptionObj(interimTrans)
+            if (interimObj != null) {
+                val text = extractText(interimObj)
+                if (text.isNotBlank()) {
+                    val speaker = extractSpeaker(interimObj)
+                    return LiveTranscriptionEvent.TranscriptionChunk(
+                        text = text,
+                        isFinal = false,
+                        speaker = speaker,
+                        isInterim = true
+                    )
+                }
+            }
+
+            // 2. Check finalized input audio transcription
+            val finalObj = serverContent.opt("inputAudioTranscription")
+                ?: serverContent.opt("inputTranscription")
+                ?: serverContent.opt("input_audio_transcription")
+                ?: serverContent.opt("input_transcription")
+
+            if (finalObj != null) {
+                val text = extractText(finalObj)
+                if (text.isNotBlank()) {
+                    val isFinal = when {
+                        finalObj is JSONObject && finalObj.has("isFinal") -> finalObj.optBoolean("isFinal")
+                        finalObj is JSONObject && finalObj.has("is_final") -> finalObj.optBoolean("is_final")
+                        else -> true
+                    }
+                    val speaker = extractSpeaker(finalObj)
+                    return LiveTranscriptionEvent.TranscriptionChunk(
+                        text = text,
+                        isFinal = isFinal,
+                        speaker = speaker,
+                        isInterim = !isFinal
+                    )
+                }
+            }
+
+            // 3. Check modelTurn text (for fallback conversational model output)
+            if (serverContent.has("modelTurn")) {
+                val modelTurn = serverContent.optJSONObject("modelTurn")
+                val parts = modelTurn?.optJSONArray("parts")
+                if (parts != null && parts.length() > 0) {
+                    val textBuilder = StringBuilder()
+                    for (i in 0 until parts.length()) {
+                        val part = parts.optJSONObject(i)
+                        val partText = part?.optString("text", "").orEmpty()
+                        textBuilder.append(partText)
+                    }
+                    val text = textBuilder.toString()
                     if (text.isNotBlank()) {
                         return LiveTranscriptionEvent.TranscriptionChunk(
                             text = text,
                             isFinal = false,
-                            speaker = interimTrans.optString("speaker", "Speaker 1"),
-                            isInterim = true
+                            speaker = "Speaker 1",
+                            isInterim = false
                         )
                     }
                 }
+            }
 
-                // 2. Check input_audio_transcription / inputAudioTranscription / inputTranscription
-                val inputTrans = serverContent.optJSONObject("inputAudioTranscription")
-                    ?: serverContent.optJSONObject("inputTranscription")
-                    ?: serverContent.optJSONObject("input_audio_transcription")
-                    ?: serverContent.optJSONObject("input_transcription")
+            if (serverContent.optBoolean("turnComplete", false) ||
+                serverContent.optBoolean("turn_complete", false) ||
+                root.optBoolean("turnComplete", false)
+            ) {
+                return LiveTranscriptionEvent.TurnComplete
+            }
 
-                if (inputTrans != null) {
-                    val text = extractTextFromTranscriptionObj(inputTrans)
-                    if (text.isNotBlank()) {
-                        val isFinal = if (inputTrans.has("isFinal")) inputTrans.optBoolean("isFinal")
-                        else if (inputTrans.has("is_final")) inputTrans.optBoolean("is_final")
-                        else true
-                        return LiveTranscriptionEvent.TranscriptionChunk(
-                            text = text,
-                            isFinal = isFinal,
-                            speaker = inputTrans.optString("speaker", "Speaker 1"),
-                            isInterim = !isFinal
-                        )
-                    }
-                }
-
-                // 3. Check modelTurn text
-                if (serverContent.has("modelTurn")) {
-                    val modelTurn = serverContent.getJSONObject("modelTurn")
-                    val parts = modelTurn.optJSONArray("parts")
-                    if (parts != null && parts.length() > 0) {
-                        val textBuilder = StringBuilder()
-                        for (i in 0 until parts.length()) {
-                            val part = parts.getJSONObject(i)
-                            textBuilder.append(part.optString("text", ""))
-                        }
-                        val text = textBuilder.toString()
-                        if (text.isNotBlank()) {
-                            return LiveTranscriptionEvent.TranscriptionChunk(
-                                text = text,
-                                isFinal = false,
-                                speaker = "Speaker 1",
-                                isInterim = false
-                            )
-                        }
-                    }
-                }
-
-                if (serverContent.optBoolean("turnComplete", false) || serverContent.optBoolean("turn_complete", false)) {
-                    return LiveTranscriptionEvent.TurnComplete
-                }
-
-                if (serverContent.optBoolean("interrupted", false)) {
-                    return LiveTranscriptionEvent.Interrupted
-                }
+            if (serverContent.optBoolean("interrupted", false) ||
+                root.optBoolean("interrupted", false)
+            ) {
+                return LiveTranscriptionEvent.Interrupted
             }
 
             null
@@ -171,19 +189,45 @@ object GeminiLiveProtocol {
         }
     }
 
-    private fun extractTextFromTranscriptionObj(obj: JSONObject): String {
-        var text = obj.optString("text", "")
-        if (text.isBlank()) {
-            val parts = obj.optJSONArray("parts")
-            if (parts != null && parts.length() > 0) {
-                val sb = StringBuilder()
-                for (i in 0 until parts.length()) {
-                    sb.append(parts.getJSONObject(i).optString("text", ""))
-                }
-                text = sb.toString()
-            }
+    private fun extractSpeaker(obj: Any?): String {
+        return if (obj is JSONObject) {
+            obj.optString("speaker", "Speaker 1").ifBlank { "Speaker 1" }
+        } else {
+            "Speaker 1"
         }
-        return text
+    }
+
+    private fun extractText(data: Any?): String {
+        return when (data) {
+            is String -> data
+            is JSONObject -> {
+                var text = data.optString("text", "")
+                if (text.isBlank()) {
+                    text = data.optString("transcript", "")
+                }
+                if (text.isBlank()) {
+                    val parts = data.optJSONArray("parts")
+                    if (parts != null && parts.length() > 0) {
+                        val sb = StringBuilder()
+                        for (i in 0 until parts.length()) {
+                            val part = parts.optJSONObject(i)
+                            sb.append(part?.optString("text", "") ?: "")
+                        }
+                        text = sb.toString()
+                    }
+                }
+                text
+            }
+            is JSONArray -> {
+                val sb = StringBuilder()
+                for (i in 0 until data.length()) {
+                    val item = data.opt(i)
+                    sb.append(extractText(item)).append(" ")
+                }
+                sb.toString().trim()
+            }
+            else -> ""
+        }
     }
 }
 
